@@ -1,0 +1,165 @@
+# HTTPS demo stack for the services that exist today: Discovery, Identity, Catalog and Gateway.
+# Cinema and Booking have no Dockerfile or database setup here yet, so their Gateway routes answer 503.
+# Runbook: docs/deploy-demo.md
+name: cinema-demo
+
+x-java-service: &java-service
+  restart: unless-stopped
+  networks: [cinema]
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-CU20-ubuntu-22.04
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${SQL_SA_PASSWORD:?set in the env file}
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    networks: [cinema]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2022-CU20-ubuntu-22.04
+    restart: "no"
+    depends_on:
+      sqlserver: { condition: service_healthy }
+    environment:
+      SQLCMDPASSWORD: ${SQL_SA_PASSWORD}
+      IDENTITY_MIGRATION_PASSWORD: ${IDENTITY_MIGRATION_PASSWORD:?set in the env file}
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD:?set in the env file}
+      CATALOG_MIGRATION_PASSWORD: ${CATALOG_MIGRATION_PASSWORD:?set in the env file}
+      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD:?set in the env file}
+    entrypoint: ["/opt/mssql-tools18/bin/sqlcmd", "-C", "-S", "sqlserver", "-U", "sa", "-b", "-i", "/init/init-databases.sql"]
+    volumes:
+      - ./sql:/init:ro
+    networks: [cinema]
+
+  discovery-server:
+    <<: *java-service
+    build: { context: .., dockerfile: infrastructure/discovery-server/Dockerfile }
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx256m
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8761/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  identity-service:
+    <<: *java-service
+    build: { context: .., dockerfile: services/identity-service/Dockerfile }
+    depends_on:
+      db-init: { condition: service_completed_successfully }
+      discovery-server: { condition: service_healthy }
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx512m
+      SPRING_DATASOURCE_URL: jdbc:sqlserver://sqlserver:1433;databaseName=identity_db;encrypt=true;trustServerCertificate=true
+      SPRING_DATASOURCE_USERNAME: identity_app
+      SPRING_DATASOURCE_PASSWORD: ${IDENTITY_DB_PASSWORD}
+      SPRING_FLYWAY_USER: identity_migrator
+      SPRING_FLYWAY_PASSWORD: ${IDENTITY_MIGRATION_PASSWORD}
+      # application.yml carries default mail credentials; an explicit value here keeps them out of the demo.
+      SPRING_MAIL_USERNAME: ${DEMO_MAIL_USERNAME:-}
+      SPRING_MAIL_PASSWORD: ${DEMO_MAIL_PASSWORD:-}
+      # Mail is optional here: an unset SMTP login must not mark the whole service unhealthy.
+      MANAGEMENT_HEALTH_MAIL_ENABLED: "false"
+      CINEMA_JWT_PRIVATE_KEY_PEM: ${JWT_PRIVATE_KEY_PEM:?set in the env file}
+      CINEMA_JWT_PUBLIC_KEY_PEM: ${JWT_PUBLIC_KEY_PEM:?set in the env file}
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
+      TRACING_EXPORT_ENABLED: "true"
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  catalog-service:
+    <<: *java-service
+    build: { context: .., dockerfile: services/catalog-service/Dockerfile }
+    depends_on:
+      db-init: { condition: service_completed_successfully }
+      identity-service: { condition: service_healthy }
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx512m
+      CATALOG_DB_URL: jdbc:sqlserver://sqlserver:1433;databaseName=catalog_db;encrypt=true;trustServerCertificate=true
+      CATALOG_DB_USERNAME: catalog_app
+      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD}
+      CATALOG_MIGRATION_USERNAME: catalog_migrator
+      CATALOG_MIGRATION_PASSWORD: ${CATALOG_MIGRATION_PASSWORD}
+      JWT_ISSUER: cinema-identity
+      JWT_JWKS_URI: http://identity-service:8081/.well-known/jwks.json
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
+      TRACING_EXPORT_ENABLED: "true"
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  api-gateway:
+    <<: *java-service
+    build: { context: .., dockerfile: infrastructure/api-gateway/Dockerfile }
+    depends_on:
+      identity-service: { condition: service_healthy }
+      catalog-service: { condition: service_healthy }
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx384m
+      JWT_ISSUER: cinema-identity
+      JWT_JWKS_URI: http://identity-service:8081/.well-known/jwks.json
+      JWT_AUDIENCE: cinema-api
+      GATEWAY_ALLOWED_ORIGINS: https://${DEMO_DOMAIN:?set in the env file}
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
+      TRACING_EXPORT_ENABLED: "true"
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  zipkin:
+    image: openzipkin/zipkin:3.6.1
+    restart: unless-stopped
+    # Traces reveal request paths. Reach this from the host only, or through an SSH tunnel.
+    ports:
+      - "127.0.0.1:9411:9411"
+    networks: [cinema]
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    depends_on:
+      api-gateway: { condition: service_healthy }
+    environment:
+      DEMO_DOMAIN: ${DEMO_DOMAIN}
+    ports:
+      - "${DEMO_HTTP_PORT:-80}:80"
+      - "${DEMO_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [cinema]
+
+networks:
+  cinema:
+
+volumes:
+  sqlserver-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,252 @@
+name: cinema-microservices
+
+x-java-service: &java-service
+  restart: unless-stopped
+  networks: [cinema]
+
+x-tracing-env: &tracing-env
+  ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
+  TRACING_EXPORT_ENABLED: ${TRACING_EXPORT_ENABLED:-false}
+  TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-CU20-ubuntu-22.04
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${SQL_SA_PASSWORD:-ChangeMe_Local_9!}
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    networks: [cinema]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2022-CU20-ubuntu-22.04
+    restart: "no"
+    depends_on:
+      sqlserver: { condition: service_healthy }
+    environment:
+      SQLCMDPASSWORD: ${SQL_SA_PASSWORD:-ChangeMe_Local_9!}
+      IDENTITY_MIGRATION_PASSWORD: ${IDENTITY_MIGRATION_PASSWORD:-ChangeMe_Local_9!}
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD:-ChangeMe_Local_9!}
+      CATALOG_MIGRATION_PASSWORD: ${CATALOG_MIGRATION_PASSWORD:-ChangeMe_Local_9!}
+      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD:-ChangeMe_Local_9!}
+      CINEMA_MIGRATION_PASSWORD: ${CINEMA_MIGRATION_PASSWORD:-ChangeMe_Local_9!}
+      CINEMA_DB_PASSWORD: ${CINEMA_DB_PASSWORD:-ChangeMe_Local_9!}
+      BOOKING_MIGRATION_PASSWORD: ${BOOKING_MIGRATION_PASSWORD:-ChangeMe_Local_9!}
+      BOOKING_DB_PASSWORD: ${BOOKING_DB_PASSWORD:-ChangeMe_Local_9!}
+    entrypoint: ["/opt/mssql-tools18/bin/sqlcmd", "-C", "-S", "sqlserver", "-U", "sa", "-b", "-i", "/init/init-databases.sql"]
+    volumes:
+      - ./deploy/sql:/init:ro
+    networks: [cinema]
+
+  discovery-server:
+    <<: *java-service
+    build:
+      context: .
+      dockerfile: infrastructure/discovery-server/Dockerfile
+    ports:
+      - "8761:8761"
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx256m
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8761/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 25s
+
+  identity-service:
+    <<: *java-service
+    build:
+      context: .
+      dockerfile: services/identity-service/Dockerfile
+    ports:
+      - "8081:8081"
+    depends_on:
+      db-init: { condition: service_completed_successfully }
+      discovery-server: { condition: service_healthy }
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx512m
+      <<: *tracing-env
+      SPRING_DATASOURCE_URL: jdbc:sqlserver://sqlserver:1433;databaseName=identity_db;encrypt=true;trustServerCertificate=true
+      SPRING_DATASOURCE_USERNAME: identity_app
+      SPRING_DATASOURCE_PASSWORD: ${IDENTITY_DB_PASSWORD:-ChangeMe_Local_9!}
+      SPRING_FLYWAY_USER: identity_migrator
+      SPRING_FLYWAY_PASSWORD: ${IDENTITY_MIGRATION_PASSWORD:-ChangeMe_Local_9!}
+      MANAGEMENT_HEALTH_MAIL_ENABLED: "false"
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      SPRING_MAIL_USERNAME: ${MAIL_USERNAME:-your-email@example.com}
+      SPRING_MAIL_PASSWORD: ${MAIL_PASSWORD:-your-mail-app-password}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  catalog-service:
+    <<: *java-service
+    build:
+      context: .
+      dockerfile: services/catalog-service/Dockerfile
+    ports:
+      - "8082:8082"
+    depends_on:
+      db-init: { condition: service_completed_successfully }
+      identity-service: { condition: service_healthy }
+      discovery-server: { condition: service_healthy }
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx512m
+      <<: *tracing-env
+      CATALOG_DB_URL: jdbc:sqlserver://sqlserver:1433;databaseName=catalog_db;encrypt=true;trustServerCertificate=true
+      CATALOG_DB_USERNAME: catalog_app
+      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD:-ChangeMe_Local_9!}
+      CATALOG_MIGRATION_USERNAME: catalog_migrator
+      CATALOG_MIGRATION_PASSWORD: ${CATALOG_MIGRATION_PASSWORD:-ChangeMe_Local_9!}
+      JWT_ISSUER: cinema-identity
+      JWT_JWKS_URI: http://identity-service:8081/.well-known/jwks.json
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  cinema-service:
+    <<: *java-service
+    build:
+      context: .
+      dockerfile: services/cinema-service/Dockerfile
+    ports:
+      - "8084:8084"
+    depends_on:
+      db-init: { condition: service_completed_successfully }
+      identity-service: { condition: service_healthy }
+      catalog-service: { condition: service_healthy }
+      discovery-server: { condition: service_healthy }
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx512m
+      <<: *tracing-env
+      CINEMA_DB_URL: jdbc:sqlserver://sqlserver:1433;databaseName=cinema_db;encrypt=true;trustServerCertificate=true
+      CINEMA_DB_USERNAME: cinema_app
+      CINEMA_DB_PASSWORD: ${CINEMA_DB_PASSWORD:-ChangeMe_Local_9!}
+      CINEMA_MIGRATION_USERNAME: cinema_migrator
+      CINEMA_MIGRATION_PASSWORD: ${CINEMA_MIGRATION_PASSWORD:-ChangeMe_Local_9!}
+      CINEMA_MIGRATION_URL: jdbc:sqlserver://sqlserver:1433;databaseName=cinema_db;encrypt=true;trustServerCertificate=true
+      JWT_ISSUER: cinema-identity
+      JWT_JWKS_URI: http://identity-service:8081/.well-known/jwks.json
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      CATALOG_SERVICE_URL: http://catalog-service:8082
+      BOOKING_SERVICE_URL: http://booking-service:8083
+      IDENTITY_SERVICE_URL: http://identity-service:8081
+      CINEMA_SERVICE_CLIENT_SECRET: ${CINEMA_SERVICE_CLIENT_SECRET:-s6wMSw96XMcBy7Y5SFEIUYlg}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8084/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  booking-service:
+    <<: *java-service
+    build:
+      context: .
+      dockerfile: services/booking-service/Dockerfile
+    ports:
+      - "8083:8083"
+    depends_on:
+      db-init: { condition: service_completed_successfully }
+      identity-service: { condition: service_healthy }
+      cinema-service: { condition: service_healthy }
+      catalog-service: { condition: service_healthy }
+      discovery-server: { condition: service_healthy }
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx512m
+      <<: *tracing-env
+      BOOKING_DB_URL: jdbc:sqlserver://sqlserver:1433;databaseName=booking_db;encrypt=true;trustServerCertificate=true
+      BOOKING_DB_USERNAME: booking_app
+      BOOKING_DB_PASSWORD: ${BOOKING_DB_PASSWORD:-ChangeMe_Local_9!}
+      BOOKING_MIGRATION_USERNAME: booking_migrator
+      BOOKING_MIGRATION_PASSWORD: ${BOOKING_MIGRATION_PASSWORD:-ChangeMe_Local_9!}
+      BOOKING_MIGRATION_URL: jdbc:sqlserver://sqlserver:1433;databaseName=booking_db;encrypt=true;trustServerCertificate=true
+      BOOKING_DEMO_PAYMENT_ENABLED: "true"
+      JWT_ISSUER: cinema-identity
+      JWT_JWKS_URI: http://identity-service:8081/.well-known/jwks.json
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8083/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  api-gateway:
+    <<: *java-service
+    build:
+      context: .
+      dockerfile: infrastructure/api-gateway/Dockerfile
+    ports:
+      - "8080:8080"
+    depends_on:
+      identity-service: { condition: service_healthy }
+      catalog-service: { condition: service_healthy }
+      cinema-service: { condition: service_healthy }
+      booking-service: { condition: service_healthy }
+    environment:
+      <<: *tracing-env
+      JAVA_TOOL_OPTIONS: -Xmx384m
+      JWT_ISSUER: cinema-identity
+      JWT_JWKS_URI: http://identity-service:8081/.well-known/jwks.json
+      JWT_AUDIENCE: cinema-api
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    profiles: ["monitoring"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks: [cinema]
+
+  zipkin:
+    image: openzipkin/zipkin:3.6.1
+    profiles: ["monitoring"]
+    ports:
+      - "9411:9411"
+    networks: [cinema]
+
+  grafana:
+    image: grafana/grafana:10.4.1
+    profiles: ["monitoring"]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-ChangeMe_Grafana_1}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks: [cinema]
+
+networks:
+  cinema:
+    driver: bridge
+
+volumes:
+  sqlserver-data:

@@ -1,0 +1,20 @@
+# Copy to cinema-local.properties (ignored by Git), or add these keys to your existing IntelliJ file, and set local values.
+# Load with --spring.config.additional-location=file:./cinema-local.properties (working directory = repository root).
+# Provision once in SSMS (choose your own passwords, never commit them):
+#   CREATE DATABASE cinema_db;
+#   CREATE LOGIN cinema_migrator WITH PASSWORD = '<strong password>';
+#   CREATE LOGIN cinema_app      WITH PASSWORD = '<strong password>';
+#   USE cinema_db;
+#   CREATE USER cinema_migrator FOR LOGIN cinema_migrator; ALTER ROLE db_owner ADD MEMBER cinema_migrator;
+#   CREATE USER cinema_app      FOR LOGIN cinema_app;      ALTER ROLE db_datareader ADD MEMBER cinema_app; ALTER ROLE db_datawriter ADD MEMBER cinema_app;
+server.port=8084
+spring.datasource.url=jdbc:sqlserver://localhost:1433;databaseName=cinema_db;encrypt=true;trustServerCertificate=true
+spring.datasource.username=cinema_app
+spring.datasource.password=<set locally>
+spring.flyway.url=jdbc:sqlserver://localhost:1433;databaseName=cinema_db;encrypt=true;trustServerCertificate=true
+spring.flyway.user=cinema_migrator
+spring.flyway.password=<set locally>
+# Must match the issuer claim issued by Identity (not its HTTP address).
+cinema.security.issuer=cinema-identity
+cinema.security.jwk-set-uri=http://localhost:8081/.well-known/jwks.json
+services.catalog.url=http://localhost:8082

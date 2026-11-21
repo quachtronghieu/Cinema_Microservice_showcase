@@ -1,0 +1,500 @@
+openapi: 3.0.3
+info:
+  title: Cinema Catalog - Movies
+  version: 0.1.0
+  description: |
+    DRAFT contract for the Movie scope of AGENTS 1.4. Implemented by the Catalog Movie module.
+    Owner: catalog-service, catalog_db. Producer/consumer review is pending.
+    New IDs are lowercase UUID strings; existing legacy IDs such as MV000001 remain unchanged.
+    Rating, watchlist and the Cinema-facing metadata API are not part of this contract.
+servers:
+  - url: /
+    description: Same-origin API Gateway; configure the gateway base URL in clients.
+tags:
+  - name: Public movies
+  - name: Admin movies
+  - name: Movie images
+paths:
+  /api/v1/movies:
+    get:
+      tags: [Public movies]
+      operationId: listMovies
+      summary: List active movies for one schedule tab
+      security: []
+      description: |
+        now-showing is a release date from 30 days ago through today, newest first.
+        coming-soon is a release date after today, soonest first. Ties sort by movieId.
+        "Today" is the calendar day in the configured business zone (default Asia/Ho_Chi_Minh).
+        Sending active returns 400; customers cannot see inactive movies.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [now-showing, coming-soon]
+            default: now-showing
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: One page of active movies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoviePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+  /api/v1/movies/{movieId}:
+    get:
+      tags: [Public movies]
+      operationId: getMovie
+      summary: Read one active movie
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/MovieId'
+      responses:
+        '200':
+          description: The movie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Movie'
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/admin/movies:
+    get:
+      tags: [Admin movies]
+      operationId: listAdminMovies
+      summary: List movies, including inactive ones
+      x-roles: [ADMIN]
+      security:
+        - bearerAuth: []
+      description: Omitted active includes both states. Sort is releaseDate descending, then movieId.
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - name: active
+          in: query
+          schema:
+            type: boolean
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: One page of movies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoviePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Admin movies]
+      operationId: createMovie
+      summary: Create a movie with its poster
+      x-roles: [ADMIN]
+      security:
+        - bearerAuth: []
+      description: |
+        The server assigns movieId, active=true and version=0, and stores the title in upper case.
+        releaseDate must be from 2 weeks to 5 months after today. image is required.
+        Fields outside the schema, including movieId, active, img and version, return 400.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/MovieForm'
+                - type: object
+                  required: [image]
+      responses:
+        '201':
+          description: Created.
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Movie'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/ImageTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+  /api/v1/admin/movies/{movieId}:
+    parameters:
+      - $ref: '#/components/parameters/MovieId'
+    get:
+      tags: [Admin movies]
+      operationId: getAdminMovie
+      summary: Read one movie, active or not
+      x-roles: [ADMIN]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The movie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Movie'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Admin movies]
+      operationId: updateMovie
+      summary: Replace a movie's fields, optionally with a new poster
+      x-roles: [ADMIN]
+      security:
+        - bearerAuth: []
+      description: |
+        version is checked first. Omitting image keeps the current poster; the previous poster
+        stays servable because historical data may reference its URL.
+        An unchanged releaseDate is always accepted. A changed one is rejected once the movie has
+        been released, and otherwise must be after today and at most 5 months ahead.
+        Equal normalized data performs no write and keeps the version.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/MovieForm'
+                - type: object
+                  required: [version]
+                  properties:
+                    version:
+                      type: integer
+                      format: int64
+                      minimum: 0
+      responses:
+        '200':
+          description: The stored movie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Movie'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/ImageTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+    delete:
+      tags: [Admin movies]
+      operationId: deactivateMovie
+      summary: Soft delete a movie
+      x-roles: [ADMIN]
+      security:
+        - bearerAuth: []
+      description: |
+        Sets active=false; the row is kept because Cinema and Booking refer to its ID.
+        The title becomes free for a new active movie. Retrying on an inactive movie returns 204
+        without writing, even with an old version.
+      parameters:
+        - name: version
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      responses:
+        '204':
+          description: The movie is inactive.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /assets/img/movies/{file}:
+    get:
+      tags: [Movie images]
+      operationId: getLegacyPoster
+      summary: Read a legacy poster bundled with Catalog
+      security: []
+      parameters:
+        - name: file
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The image.
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /assets/img/movies/uploads/{imageId}.{extension}:
+    get:
+      tags: [Movie images]
+      operationId: getUploadedPoster
+      summary: Read an uploaded poster
+      security: []
+      description: Responses are immutable and cacheable because a new upload always receives a new ID.
+      parameters:
+        - name: imageId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: extension
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [jpg, png, webp]
+      responses:
+        '200':
+          description: The image.
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    MovieId:
+      name: movieId
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 36
+    Search:
+      name: search
+      in: query
+      description: Case-insensitive title substring. Surrounding spaces are ignored; wildcards match literally.
+      schema:
+        type: string
+        maxLength: 100
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Size:
+      name: size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+  responses:
+    BadRequest:
+      description: Invalid input.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: VALIDATION_ERROR
+            message: Invalid movie data
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+            fieldErrors:
+              releaseDate: [Release date must be at least 2 weeks after today]
+    InvalidToken:
+      description: A bearer token was sent but is invalid or expired. Omit it to read as a guest.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: The token lacks the ADMIN role.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: MOVIE_NOT_FOUND, IMAGE_NOT_FOUND or NOT_FOUND. Customers also receive this for inactive movies.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: MOVIE_VERSION_CONFLICT or MOVIE_TITLE_CONFLICT.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ImageTooLarge:
+      description: IMAGE_TOO_LARGE. The poster exceeds 5 MB.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnsupportedMediaType:
+      description: UNSUPPORTED_MEDIA_TYPE. The request is not multipart/form-data.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    MovieForm:
+      type: object
+      required: [title, genre, summary, duration, releaseDate, ageRating, trailer]
+      properties:
+        title:
+          type: string
+          minLength: 2
+          maxLength: 100
+          pattern: "^[A-Za-z0-9 .,:;!?'\"()\\-]+$"
+          description: ASCII only because the column is VARCHAR. Unique among active movies, ignoring case.
+        genre:
+          type: string
+          minLength: 2
+          maxLength: 100
+          pattern: '^[A-Za-z0-9 ,/\-]+$'
+        summary:
+          type: string
+          minLength: 10
+          maxLength: 1000
+        duration:
+          type: integer
+          minimum: 61
+          maximum: 180
+        releaseDate:
+          type: string
+          format: date
+        ageRating:
+          type: string
+          enum: [P, T13, T16, T18]
+        trailer:
+          type: string
+          maxLength: 255
+          description: A youtube.com/watch?v= or youtu.be link.
+        image:
+          type: string
+          format: binary
+          description: JPEG, PNG or WEBP up to 5 MB, identified by file signature rather than by filename or declared type.
+    Movie:
+      type: object
+      required: [movieId, title, genre, duration, releaseDate, img, trailer, active, version]
+      properties:
+        movieId:
+          type: string
+        title:
+          type: string
+        genre:
+          type: string
+        summary:
+          type: string
+          nullable: true
+          description: May be null on imported legacy rows.
+        duration:
+          type: integer
+        releaseDate:
+          type: string
+          format: date
+        ageRating:
+          type: string
+          nullable: true
+          description: May be null on imported legacy rows.
+        img:
+          type: string
+          description: Gateway-relative poster path.
+        trailer:
+          type: string
+          description: May be empty on imported legacy rows.
+        active:
+          type: boolean
+        version:
+          type: integer
+          format: int64
+    MoviePage:
+      type: object
+      required: [items, page, size, totalElements, totalPages]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Movie'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+    Error:
+      type: object
+      required: [code, message, traceId, fieldErrors]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        traceId:
+          type: string
+          description: The distributed trace ID when tracing is active; look it up in Zipkin.
+        fieldErrors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string

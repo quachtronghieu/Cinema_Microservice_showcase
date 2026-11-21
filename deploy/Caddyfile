@@ -1,0 +1,5 @@
+# Caddy obtains and renews the certificate for DEMO_DOMAIN. Only the Gateway is published.
+{$DEMO_DOMAIN} {
+	encode gzip
+	reverse_proxy api-gateway:8080
+}

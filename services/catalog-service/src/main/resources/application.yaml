@@ -1,0 +1,63 @@
+server:
+  port: 8082
+spring:
+  application:
+    name: catalog-service
+  datasource:
+    url: ${CATALOG_DB_URL}
+    username: ${CATALOG_DB_USERNAME}
+    password: ${CATALOG_DB_PASSWORD}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+    clean-disabled: true
+    url: ${CATALOG_MIGRATION_URL:${CATALOG_DB_URL}}
+    user: ${CATALOG_MIGRATION_USERNAME}
+    password: ${CATALOG_MIGRATION_PASSWORD}
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+      accept-float-as-int: false
+      fail-on-numbers-for-enums: true
+    mapper:
+      allow-coercion-of-scalars: false
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+catalog:
+  business-zone: ${CATALOG_BUSINESS_ZONE:Asia/Ho_Chi_Minh}
+  security:
+    issuer: ${JWT_ISSUER}
+    jwk-set-uri: ${JWT_JWKS_URI}
+    audience: cinema-api
+eureka:
+  instance:
+    prefer-ip-address: true
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+      export:
+        enabled: ${TRACING_EXPORT_ENABLED:false}

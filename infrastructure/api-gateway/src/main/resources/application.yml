@@ -1,0 +1,106 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  reactor:
+    context-propagation: auto
+  cloud:
+    gateway:
+      server:
+        webflux:
+          httpclient:
+            connect-timeout: 2000
+            response-timeout: 3s
+          globalcors:
+            corsConfigurations:
+              '[/**]':
+                allowedOrigins: ${GATEWAY_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+                allowedMethods:
+                  - GET
+                  - POST
+                  - PUT
+                  - DELETE
+                  - OPTIONS
+                  - PATCH
+                allowedHeaders: "*"
+          # Downstream services set X-Trace-Id too; clients must see a single value.
+          default-filters:
+            - DedupeResponseHeader=X-Trace-Id RETAIN_FIRST
+          routes:
+            # Route 1: JWKS Public Key Endpoint for Resource Servers & Clients
+            - id: identity-jwks
+              uri: lb://identity-service
+              predicates:
+                - Path=/.well-known/jwks.json
+
+            # Route 2: Identity Service (Port 8081) - Account & Profile
+            # Covers: /api/v1/auth/**, /api/v1/customers/profile/**
+            - id: identity-service
+              uri: lb://identity-service
+              predicates:
+                - Path=/api/v1/auth/**, /api/auth/**, /api/v1/customers/profile/**, /api/v1/admin/accounts/**, /api/v1/admin/staffs/**, /api/v1/admin/migration/**
+
+            # Route 3: Catalog Service (Port 8082) - Movie Discovery & Watchlist
+            # Covers: /api/v1/movies/**, /api/v1/admin/movies/**, /api/v1/customer/watchlist/**, /api/v1/concessions/**
+            - id: catalog-service
+              uri: lb://catalog-service
+              predicates:
+                - Path=/api/v1/movies/**, /api/v1/admin/movies/**, /assets/img/movies/**, /api/v1/customer/watchlist/**, /api/concessions/**, /api/v1/concessions/**, /api/v1/admin/concessions/**, /assets/img/concessions/**
+
+            # Booking owns a showtime's real seat inventory. Must stay before the Cinema route, which matches /api/v1/showtimes/**.
+            - id: booking-seat-availability
+              uri: lb://booking-service
+              predicates:
+                - Path=/api/v1/showtimes/*/seat-availability
+
+            # Route 4: Cinema Service (Port 8084) - Manage Showtimes & Showtimes & Seats
+            # Covers: /api/v1/showtimes/**, /api/v1/admin/showtimes/**
+            - id: cinema-service
+              uri: lb://cinema-service
+              predicates:
+                - Path=/api/v1/showtimes/**, /api/v1/admin/showtimes/**, /api/v1/admin/rooms/**, /api/showtimes/**, /api/rooms/**
+
+            # Route 5: Booking Service - Seat Holds, Bookings, Payments, Tickets (Port 8083)
+            - id: booking-service
+              uri: lb://booking-service
+              predicates:
+                - Path=/api/v1/customer/seat-holds/**, /api/v1/customer/bookings/**, /api/v1/customer/tickets/**, /api/v1/admin/tickets/**, /api/v1/admin/vouchers/**
+
+eureka:
+  instance:
+    prefer-ip-address: true
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+    prometheus:
+      access: read-only
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+      export:
+        enabled: ${TRACING_EXPORT_ENABLED:false}
+
+gateway:
+  security:
+    issuer: ${JWT_ISSUER:cinema-identity}
+    jwk-set-uri: ${JWT_JWKS_URI:http://localhost:8081/.well-known/jwks.json}
+    audience: ${JWT_AUDIENCE:cinema-api}
+  cors:
+    allowed-origins: ${GATEWAY_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}

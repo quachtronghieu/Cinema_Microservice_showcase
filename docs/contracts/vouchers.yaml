@@ -1,0 +1,304 @@
+openapi: 3.0.3
+info:
+  title: Cinema Booking - ADMIN Vouchers
+  version: 0.1.0
+  description: |
+    User-approved contract for the two ADMIN Voucher tasks. ADMIN APIs are
+    implemented and locally tested; the user confirmed the guided live Gateway/
+    Identity-token Postman checks. See verification.md for exact scope and remaining
+    Booking pricing integration work; producer/consumer review is still separate.
+    Owner is booking-service / booking_db; clients call API Gateway.
+    Business decisions: booking-pricing-voucher-decisions.md.
+    The user approved this draft's endpoint shapes, error code names, filters,
+    normalization and no-op behavior on 2026-11-07. Booking-owner review and
+    runtime implementation/acceptance are still separate requirements.
+    No description/expiry fields or schema migration is proposed.
+    Existing IDs are preserved; new IDs are lowercase UUIDs.
+    No hard delete. Disable blocks new reservations, preserving existing bookings.
+    Version is an informational change counter; no JPA @Version or client CAS.
+servers:
+  - url: /
+    description: API Gateway origin configured by the caller.
+security:
+  - bearerAuth: []
+tags:
+  - name: Admin vouchers
+paths:
+  /api/v1/admin/vouchers:
+    get:
+      tags: [Admin vouchers]
+      operationId: listAdminVouchers
+      summary: List vouchers including disabled and exhausted vouchers
+      x-roles: [ADMIN]
+      description: |
+        Sort voucherId ascending. No status filter means include both states.
+        Validate page/size; never silently clamp. totalElements is the filtered
+        total, totalPages is its ceiling divided by size, zero for no results.
+        Separate HTTP page reads do not provide a transaction snapshot.
+      parameters:
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 0, default: 0}
+        - name: size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: status
+          in: query
+          schema: {type: boolean}
+      responses:
+        '200':
+          description: Voucher page
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VoucherPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [Admin vouchers]
+      operationId: createAdminVoucher
+      summary: Create an enabled voucher
+      x-roles: [ADMIN]
+      description: |
+        Server assigns voucherId, status=true, usedCount=0, reservedCount=0,
+        version=0. Input is normalized before validation: trim code/name;
+        uppercase code with Locale.ROOT. Case-insensitive uniqueness matches
+        booking_db collation; a duplicate code returns 409 even if disabled.
+        A zero usageLimit creates an enabled voucher with no available uses.
+        No POST replay guarantee: do not automatically retry uncertain outcomes.
+        Omitted required fields, unknown fields, nulls and invalid numbers are 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateVoucher'}
+            example:
+              code: HIEU10
+              voucherName: Hieu ten percent discount
+              discountType: PERCENTAGE
+              discountValue: 10
+              usageLimit: 100
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location:
+              schema: {type: string}
+              description: Relative ADMIN voucher detail URI.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Voucher'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/vouchers/{id}:
+    parameters:
+      - $ref: '#/components/parameters/VoucherId'
+    get:
+      tags: [Admin vouchers]
+      operationId: getAdminVoucher
+      summary: Read any voucher, including disabled or exhausted vouchers
+      x-roles: [ADMIN]
+      responses:
+        '200':
+          description: Voucher detail
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Voucher'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [Admin vouchers]
+      operationId: editAdminVoucher
+      summary: Edit only the supplied voucher fields
+      x-roles: [ADMIN]
+      description: |
+        Partial JSON object, not JSON Patch. Omitted fields remain unchanged;
+        nulls, unknown fields, an empty object and server-owned fields are 400.
+        Normalize code/name as on create. Validate the resulting type/value pair,
+        including discountValue <= 100 for PERCENTAGE, even when only one is sent.
+        Code/type/value changes require usedCount=0 AND reservedCount=0 atomically.
+        If those values are unchanged, including them is not a protected edit.
+        Once all reservations release with no consumed uses, editing is allowed again.
+        voucherName, status and valid usageLimit changes remain allowed with usage.
+        usageLimit must be >= current usedCount + reservedCount under the same lock.
+        If any changed field conflicts, reject the entire command without partial edits.
+        Serialize on the same row as Booking reservation/payment/release commands.
+        Two valid ADMIN writes to the same field use database last-writer-wins;
+        only supplied fields are written. No expected version is accepted.
+        No-op returns 200 with current data and unchanged version. A command changing
+        one or more fields increments version exactly once using SQL version=version+1.
+        status=false blocks new reservations; existing reserved bookings still pay.
+        status=true re-enables reservations only if quota is available; never resets counters.
+        Replay is a new command evaluated against current state, not a stored response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EditVoucher'}
+            example: {usageLimit: 120}
+      responses:
+        '200':
+          description: Current voucher after the command
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Voucher'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/vouchers/{id}/disable:
+    parameters:
+      - $ref: '#/components/parameters/VoucherId'
+    post:
+      tags: [Admin vouchers]
+      operationId: disableAdminVoucher
+      summary: Disable new voucher reservations without deleting history
+      x-roles: [ADMIN]
+      description: |
+        No request body or version parameter. Atomically set status=false.
+        Changed state increments version once; already disabled is 204 without
+        increment. Existing reserved bookings may still pay within their deadline.
+        Concurrent enable/disable commands use database last-writer-wins.
+        Success has no body; not-found remains 404.
+      responses:
+        '204': {description: 'Disabled, or already disabled; no body'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    VoucherId:
+      name: id
+      in: path
+      required: true
+      description: Existing string ID or a new lowercase UUID; do not reject legacy IDs for not being UUIDs.
+      schema: {type: string, minLength: 1, maxLength: 36}
+  schemas:
+    Code:
+      type: string
+      minLength: 1
+      maxLength: 20
+      description: Trimmed and uppercased; must not be blank. No additional character policy is agreed yet.
+    VoucherName:
+      type: string
+      minLength: 1
+      maxLength: 255
+      description: Trimmed, nonblank; existing voucher_name column, not a description.
+    DiscountType: {type: string, enum: [PERCENTAGE, FIXED]}
+    DiscountValue:
+      type: number
+      minimum: 0
+      exclusiveMinimum: true
+      maximum: 99999999999999999.99
+      multipleOf: 0.01
+      description: BigDecimal / DECIMAL(19,2), at most two significant fractional places. PERCENTAGE is at most 100.
+    UsageLimit: {type: integer, minimum: 0, maximum: 2147483647}
+    CreateVoucher:
+      type: object
+      additionalProperties: false
+      required: [code, voucherName, discountType, discountValue, usageLimit]
+      properties:
+        code: {$ref: '#/components/schemas/Code'}
+        voucherName: {$ref: '#/components/schemas/VoucherName'}
+        discountType: {$ref: '#/components/schemas/DiscountType'}
+        discountValue: {$ref: '#/components/schemas/DiscountValue'}
+        usageLimit: {$ref: '#/components/schemas/UsageLimit'}
+      oneOf:
+        - properties:
+            discountType: {type: string, enum: [PERCENTAGE]}
+            discountValue: {type: number, maximum: 100}
+        - properties:
+            discountType: {type: string, enum: [FIXED]}
+    EditVoucher:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        code: {$ref: '#/components/schemas/Code'}
+        voucherName: {$ref: '#/components/schemas/VoucherName'}
+        discountType: {$ref: '#/components/schemas/DiscountType'}
+        discountValue: {$ref: '#/components/schemas/DiscountValue'}
+        usageLimit: {$ref: '#/components/schemas/UsageLimit'}
+        status: {type: boolean}
+    Voucher:
+      type: object
+      additionalProperties: false
+      required: [voucherId, code, voucherName, discountType, discountValue, usageLimit, usedCount, reservedCount, remainingCount, status, version]
+      properties:
+        voucherId: {type: string, maxLength: 36}
+        code: {$ref: '#/components/schemas/Code'}
+        voucherName: {$ref: '#/components/schemas/VoucherName'}
+        discountType: {$ref: '#/components/schemas/DiscountType'}
+        discountValue: {$ref: '#/components/schemas/DiscountValue'}
+        usageLimit: {$ref: '#/components/schemas/UsageLimit'}
+        usedCount: {type: integer, minimum: 0}
+        reservedCount: {type: integer, minimum: 0}
+        remainingCount:
+          type: integer
+          minimum: 0
+          description: usageLimit - usedCount - reservedCount, even if status=false; not a promise of eligibility.
+        status: {type: boolean}
+        version: {type: integer, format: int64, minimum: 0, readOnly: true}
+    VoucherPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, size, totalElements, totalPages]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Voucher'}}
+        page: {type: integer, minimum: 0}
+        size: {type: integer, minimum: 1, maximum: 100}
+        totalElements: {type: integer, format: int64, minimum: 0}
+        totalPages: {type: integer, minimum: 0}
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message, traceId, fieldErrors]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        traceId: {type: string}
+        fieldErrors:
+          type: object
+          additionalProperties: {type: array, items: {type: string}}
+  responses:
+    BadRequest:
+      description: HTTP 400 VALIDATION_ERROR; invalid input or resulting type/value pair.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ApiError'}
+          example: {code: VALIDATION_ERROR, message: Invalid voucher data, traceId: example-trace, fieldErrors: {usageLimit: [must be greater than or equal to 0]}}
+    Unauthorized:
+      description: HTTP 401 UNAUTHORIZED; missing, invalid or expired Bearer token.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ApiError'}
+    Forbidden:
+      description: HTTP 403 FORBIDDEN; authenticated caller without ADMIN role.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ApiError'}
+    NotFound:
+      description: HTTP 404 VOUCHER_NOT_FOUND.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ApiError'}
+    Conflict:
+      description: |
+        HTTP 409 VOUCHER_CODE_EXISTS for duplicate code;
+        VOUCHER_EDIT_RESTRICTED for changed code/type/value while used or reserved;
+        VOUCHER_LIMIT_CONFLICT when the new limit is below used+reserved.
+        The whole command fails without state/version changes.
+        Validation runs before transactional conflict checks; no ordering among
+        multiple simultaneous business conflicts is promised.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ApiError'}
+          example: {code: VOUCHER_LIMIT_CONFLICT, message: Usage limit is below used and reserved uses, traceId: example-trace, fieldErrors: {}}

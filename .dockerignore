@@ -1,0 +1,10 @@
+**/target
+**/.git
+**/.idea
+**/.env
+*.env
+Cinema_Management
+cinema_booking_app
+docs
+monitoring
+deploy

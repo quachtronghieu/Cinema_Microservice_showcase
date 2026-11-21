@@ -1,0 +1,4 @@
+# Copy to application-local.properties (git-ignored) and fill in real values
+spring.datasource.password=
+spring.mail.username=
+spring.mail.password=

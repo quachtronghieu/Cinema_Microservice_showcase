@@ -1,0 +1,538 @@
+openapi: 3.0.3
+info:
+  title: Cinema Catalog - Concessions
+  version: 0.2.0
+  description: |
+    DRAFT contract for the customer/admin scope in AGENTS 1.4.
+    Implemented by the new Catalog Concession module; legacy cutover is pending.
+    Owner: catalog-service, catalog_db. Producer/consumer review is pending.
+    Concession catalog prices are positive whole VND amounts.
+    Money storage remains BigDecimal/DECIMAL(19,2); this does not change Booking discount/total precision.
+    Existing fractional catalog prices require explicit reconciliation before acceptance; never round them automatically.
+    New IDs are lowercase UUID strings; existing IDs remain unchanged.
+    No inventory/stock management or image upload is included.
+servers:
+  - url: /
+    description: Same-origin API Gateway; configure the gateway base URL in clients.
+security:
+  - bearerAuth: []
+tags:
+  - name: Admin concessions
+  - name: Customer concessions
+paths:
+  /api/v1/admin/concessions:
+    get:
+      tags: [Admin concessions]
+      operationId: listAdminConcessions
+      summary: List concessions, including inactive items
+      x-roles: [ADMIN]
+      description: |
+        Omitted active includes both active and inactive items.
+        Filters are combined with AND. Sort is concessionId ascending.
+        Invalid pagination/filter values return 400; do not silently clamp them.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/TypeFilter'
+        - name: active
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          $ref: '#/components/responses/ConcessionPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Admin concessions]
+      operationId: createConcession
+      summary: Create an active concession
+      x-roles: [ADMIN]
+      description: |
+        Server assigns concessionId, active=true and version=0.
+        Client cannot assign ID, active or version. The returned version is
+        the value persisted by the server. This command has no idempotency
+        guarantee; do not automatically retry after an uncertain outcome.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConcessionRequest'
+            example:
+              type: PC
+              name: Caramel Popcorn
+              description: Caramel popcorn, medium size.
+              price: 50000.00
+              img: popcorn_caramel.png
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location:
+              description: Relative URI of the created admin resource.
+              schema:
+                type: string
+              example: /api/v1/admin/concessions/731a7590-37fb-4b40-ad78-0c412cf1930e
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Concession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/concessions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ConcessionId'
+    get:
+      tags: [Admin concessions]
+      operationId: getAdminConcession
+      summary: Read an active or inactive concession
+      x-roles: [ADMIN]
+      responses:
+        '200':
+          $ref: '#/components/responses/Concession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Admin concessions]
+      operationId: updateConcession
+      summary: Update editable fields using the last read version
+      x-roles: [ADMIN]
+      description: |
+        Full replacement of type, name, description, price and image.
+        Does not change active. Inactive items may also be edited.
+        Reactivation is outside this task.
+        Client sends its last read version. Compare it to the stored version
+        and protect the write with optimistic locking/CAS in one transaction.
+        A stale version or concurrent write returns 409.
+        Do not assign the client version to the entity's persistence version.
+        Check version before testing whether the business fields changed.
+        A matching version with unchanged normalized business data returns 200
+        with the current DTO, without an UPDATE or version increment.
+        Compare trimmed name/description, enum type, numeric price value
+        (50000 and 50000.00 are equal) and the resolved approved image path.
+        The no-change decision and version check must be consistent with
+        concurrent writers, using a transaction/lock or equivalent concurrency control.
+        If business data changes, atomically write it and increment version once.
+        Return the persisted version: unchanged for a no-op, incremented for a write.
+        Existing booking snapshots must not be rewritten by this operation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateConcessionRequest'
+            example:
+              type: PC
+              name: Caramel Popcorn
+              description: Caramel popcorn, medium size.
+              price: 55000.00
+              img: popcorn_caramel.png
+              version: 0
+      responses:
+        '200':
+          $ref: '#/components/responses/Concession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+    delete:
+      tags: [Admin concessions]
+      operationId: deactivateConcession
+      summary: Stop selling a concession without deleting its history
+      x-roles: [ADMIN]
+      description: |
+        Required version is a non-negative integer from the last read response.
+        After input validation and authorization: missing item returns 404;
+        already inactive item returns 204 without incrementing version,
+        including a retry with an older version;
+        active item with stale version returns 409.
+        An active item is atomically changed to active=false with a version increment
+        using optimistic locking/CAS. If a concurrent write wins, re-evaluate the
+        current item: inactive returns 204 without another write; still active with
+        a different version returns 409. Re-read before retrying a conflict.
+        No physical deletion, booking lookup or cross-domain database access.
+        Existing booking snapshots remain unchanged. New customer reads/quotes
+        exclude inactive items. Valid existing bookings may continue payment
+        using their snapshots until their payment deadline.
+        Deactivation between quote and booking creation remains a Catalog-Booking
+        contract decision that must be resolved before integration acceptance.
+      parameters:
+        - name: version
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/Version'
+      responses:
+        '204':
+          description: Inactive; empty response body
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+  /api/v1/concessions:
+    get:
+      tags: [Customer concessions]
+      operationId: listCustomerConcessions
+      summary: List active concessions
+      x-roles: [USER, ADMIN]
+      description: |
+        Always filters active=true. No customer active override is supported.
+        Reject an active query parameter with 400.
+        Sort is concessionId ascending. Invalid pagination returns 400.
+        This list displays current prices; Booking obtains an authoritative quote
+        through the separate internal Catalog contract before creating a booking.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/TypeFilter'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConcessionPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/concessions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ConcessionId'
+    get:
+      tags: [Customer concessions]
+      operationId: getCustomerConcession
+      summary: Read an active concession
+      x-roles: [USER, ADMIN]
+      description: Missing and inactive items both return 404.
+      responses:
+        '200':
+          $ref: '#/components/responses/Concession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Follow AGENTS JWT rules. Gateway and Catalog validate signature,
+        algorithm, issuer, audience and lifetime. Catalog enforces x-roles.
+        x-roles documents authorization; it does not enforce it automatically.
+  parameters:
+    ConcessionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 36
+      description: Existing legacy ID or server-generated lowercase UUID.
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Size:
+      name: size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    TypeFilter:
+      name: type
+      in: query
+      schema:
+        $ref: '#/components/schemas/ConcessionType'
+  schemas:
+    ConcessionType:
+      type: string
+      enum: [PC, DR]
+      description: Explicit popcorn/drink type; never inferred from a new ID.
+    Name:
+      type: string
+      minLength: 2
+      maxLength: 50
+      pattern: '^[A-Za-z0-9 ]+$'
+      description: Trim before validation/storage; preserves legacy English-only validation.
+    Description:
+      type: string
+      minLength: 5
+      maxLength: 200
+      pattern: '^[A-Za-z0-9 ,.]+$'
+      description: Trim before validation/storage; preserves legacy validation.
+    Price:
+      type: number
+      minimum: 0
+      exclusiveMinimum: true
+      maximum: 99999999999999999
+      multipleOf: 1
+      description: |
+        Positive whole VND amount, at most 17 integer digits.
+        Numerically integral values such as 25000 and 25000.00 are accepted.
+        Reject non-zero fractional parts; never silently round input.
+        Storage remains BigDecimal/DECIMAL(19,2); never use double for money calculations.
+      example: 50000
+    Image:
+      type: string
+      minLength: 1
+      maxLength: 255
+      description: |
+        Filename of an existing approved concession asset, e.g. popcorn.png.
+        Validate against the packaged asset allowlist, reject paths and URLs.
+        Store/return the resolved public path, at most 255 characters.
+        No filesystem directory scanning requirement and no upload operation.
+    Version:
+      type: integer
+      format: int64
+      minimum: 0
+    CreateConcessionRequest:
+      type: object
+      additionalProperties: false
+      required: [type, name, description, price, img]
+      properties:
+        type:
+          $ref: '#/components/schemas/ConcessionType'
+        name:
+          $ref: '#/components/schemas/Name'
+        description:
+          $ref: '#/components/schemas/Description'
+        price:
+          $ref: '#/components/schemas/Price'
+        img:
+          $ref: '#/components/schemas/Image'
+    UpdateConcessionRequest:
+      type: object
+      additionalProperties: false
+      required: [type, name, description, price, img, version]
+      properties:
+        type:
+          $ref: '#/components/schemas/ConcessionType'
+        name:
+          $ref: '#/components/schemas/Name'
+        description:
+          $ref: '#/components/schemas/Description'
+        price:
+          $ref: '#/components/schemas/Price'
+        img:
+          $ref: '#/components/schemas/Image'
+        version:
+          $ref: '#/components/schemas/Version'
+    Concession:
+      type: object
+      required: [concessionId, type, name, description, price, img, active, version]
+      properties:
+        concessionId:
+          type: string
+          minLength: 1
+          maxLength: 36
+        type:
+          $ref: '#/components/schemas/ConcessionType'
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          $ref: '#/components/schemas/Price'
+        img:
+          type: string
+          description: Public asset path resolved from the approved filename.
+          example: /assets/img/concessions/popcorn_caramel.png
+        active:
+          type: boolean
+        version:
+          $ref: '#/components/schemas/Version'
+    ConcessionPage:
+      type: object
+      required: [items, page, size, totalElements, totalPages]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Concession'
+        page:
+          type: integer
+          minimum: 0
+        size:
+          type: integer
+          minimum: 1
+          maximum: 100
+        totalElements:
+          type: integer
+          format: int64
+          minimum: 0
+        totalPages:
+          type: integer
+          minimum: 0
+    Error:
+      type: object
+      required: [code, message, traceId, fieldErrors]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        traceId:
+          type: string
+        fieldErrors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+  responses:
+    Concession:
+      description: Success
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Concession'
+    ConcessionPage:
+      description: Success; an empty result has items=[], totalElements=0 and totalPages=0.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ConcessionPage'
+    BadRequest:
+      description: Invalid JSON, unknown body fields, invalid input or missing/invalid version.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: VALIDATION_ERROR
+            message: Invalid request data
+            traceId: example-trace-id
+            fieldErrors:
+              price: [Price must be positive and a whole VND amount.]
+    Unauthorized:
+      description: Missing, expired or invalid bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: UNAUTHORIZED
+            message: Authentication required
+            traceId: example-trace-id
+            fieldErrors: {}
+    Forbidden:
+      description: Valid identity without the required role; legacy staff roles grant no access.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: FORBIDDEN
+            message: Insufficient permission
+            traceId: example-trace-id
+            fieldErrors: {}
+    NotFound:
+      description: Concession not found, or inactive for a customer read.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: CONCESSION_NOT_FOUND
+            message: Concession not found
+            traceId: example-trace-id
+            fieldErrors: {}
+    VersionConflict:
+      description: Stale version or concurrent write; read the resource again before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: CONCESSION_VERSION_CONFLICT
+            message: Concession changed. Read it again before updating.
+            traceId: example-trace-id
+            fieldErrors: {}
+x-legacy-compatibility:
+  status: Adapter mapping and client verification required before cutover.
+  source: /api/concessions
+  rules:
+    - Preserve existing IDs; never rewrite booking references to use new UUIDs.
+    - Legacy list uses page starting at 1 and pageSize; v1 uses page starting at 0 and size.
+    - Preserve the legacy response shape in an adapter while clients migrate.
+    - Legacy images endpoint remains an adapter concern; image upload is outside this task.
+    - Legacy write routes must enforce ADMIN and use the same application invariant.
+    - Activate a single domain writer at cutover; do not dual-write legacy and Catalog.
+x-migration-dependencies:
+  - Store type explicitly; validate legacy PC/DR prefixes only during migration.
+  - Preserve IDs and reconcile active/type values; initialize migrated version to zero.
+  - Use a new Flyway version for an already migrated database.
+  - Booking stores concessionId, concessionName, unitPrice and quantity snapshots.
+  - Remove cross-domain JPA/FK references during the coordinated Booking cutover.
+  - Reconcile missing historical names; current names alone do not prove original names.
+x-user-confirmed-decisions:
+  creation:
+    defaults: Backend sets active=true and version=0; client cannot assign these fields.
+  updates:
+    authorization: ADMIN only; missing/invalid token returns 401, USER returns 403.
+    put: Required body version; missing ID returns 404, stale version returns 409 CONCESSION_VERSION_CONFLICT.
+    success: Check version first. Unchanged normalized data returns 200 without an UPDATE or version increment. Changed data is written atomically with one version increment and returns 200.
+    active: PUT never changes active; reactivation is outside this task.
+  deactivation:
+    version: Required non-negative integer query parameter; missing/invalid input returns 400.
+    missing: Return 404.
+    inactive: Return 204 without writing or incrementing version, including retries with an older version.
+    active: Matching version atomically sets active=false and increments version; return 204 without a body. Stale version returns 409 CONCESSION_VERSION_CONFLICT.
+  history:
+    reads: ADMIN can read active/inactive items; customer detail of an inactive item returns 404.
+    quotes: New quotes reject inactive items.
+    bookings: Preserve name, unit price and quantity snapshots; valid existing bookings can pay until their deadline.
+  validation:
+    name: Trimmed length 2-50; English letters, digits and spaces only.
+    description: Trimmed length 5-200; English letters, digits, spaces, commas and periods only.
+  images:
+    source: Existing approved concession assets.
+    request: Filename only; required for both POST and PUT. Resend the existing filename to retain an image.
+    response: Resolved public asset path.
+    validation: Reject unapproved filenames with 400 VALIDATION_ERROR and fieldErrors.img.
+    packaging: Asset allowlist must work in packaged JAR and Docker; do not rely on ClassPathResource.getFile().
+x-pending-integration-decisions:
+  - 'PENDING REVIEW: proposed quote validity is 60 seconds; inactive items receive no new quotes, but quotes issued before deactivation remain usable until expiry. Booking has not approved this policy. See catalog-booking-quote-proposal.md.'
+  - Integration acceptance requires agreed Catalog and Booking contracts, implementation and executed tests. The user will discuss the outstanding decision with Booking later.
+x-required-acceptance-tests:
+  - Concurrent PUT requests that change data using the same version allow exactly one successful write; concurrent no-op PUTs may both return 200 with unchanged version.
+  - PUT competing with DELETE preserves atomic version checks and never reactivates an item.
+  - Identical normalized data with a matching version returns 200 without an UPDATE or version increment; stale version still returns 409. Dedicated cases CON-PUT-01 through CON-PUT-03 are defined in concessions-acceptance.md.
+  - Repeated or concurrent DELETE on an inactive item does not increment version again.
+  - Missing or malformed DELETE version returns 400; missing item returns 404.
+  - Verify ADMIN, USER and missing/invalid token authorization at Catalog and Gateway.
+  - Catalog updates/deactivation preserve existing booking snapshots and payment deadlines.

@@ -1,0 +1,132 @@
+package vn.edu.fpt.cinemamanagement.config;
+
+import java.util.List;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+@Configuration
+public class SecurityConfig {
+
+    private final UserDetailsService userDetailsService;
+
+    public SecurityConfig(UserDetailsService userDetailsService) {
+        this.userDetailsService = userDetailsService;
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration authConfig) throws Exception {
+        return authConfig.getAuthenticationManager();
+    }
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(List.of("http://localhost:5173"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("*"));
+        config.setAllowCredentials(true);
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                .csrf(csrf -> csrf.ignoringRequestMatchers("/api/concessions/**"))
+                .csrf(csrf -> csrf.ignoringRequestMatchers("/api/vouchers/admin/**"))
+
+                // dùng service hiện có (optional nhưng nên có)
+                .userDetailsService(userDetailsService)
+
+                .authorizeHttpRequests(auth -> auth
+                        //  Static assets & public files
+                        .requestMatchers("/css/**", "/js/**", "/images/**", "/assets/**", "/webjars/**",
+                                "/favicon.ico", "/error").permitAll()
+
+                        // REST API routes
+                        .requestMatchers("/api/auth/**", "/api/public/**").permitAll()
+                        // Profile endpoint: cho phép mọi staff đã xác thực xem/cập nhật profile bản thân
+                        .requestMatchers("/api/admin/staffs/me").authenticated()
+                        .requestMatchers("/api/admin/**").hasAuthority("ROLE_ADMIN")
+                        .requestMatchers("/api/cashier/**").hasAnyAuthority("ROLE_CASHIER_STAFF", "ROLE_ADMIN")
+                        .requestMatchers("/api/vouchers/**", "/api/staff-schedules/**").authenticated()
+
+                        // Trang cho guest (không cần login)
+                        .requestMatchers("/", "/homepage", "/homepage/**",
+                                "/movies/**",
+                                "/login", "/register", "/forget_password", "/api/auth/forgot-password", "/api/auth/reset-password",
+                                "/sendmail", "/verify/**", "/rooms/seat", "/qrpayment/**", "/payments/paymentsuccess/**", "/ticket/**").permitAll()
+                        .requestMatchers("/booking/**").authenticated()
+
+                        // Trang yêu cầu quyền
+                        .requestMatchers("/dashboard", "/api/vouchers/admin/**", "/api/admin/**" ).hasAuthority("ROLE_ADMIN")
+                        .requestMatchers("/api/payments/**").authenticated()
+                        // Lưu ý: sửa tên quyền cho đúng với DB của bạn
+                        .requestMatchers("/staff_home", "/cashier/**")
+                        .hasAnyAuthority("ROLE_CASHIER_STAFF", "ROLE_REDEMPTION_STAFF")
+                        .requestMatchers(HttpMethod.GET, "/api/concessions")
+                        .hasAnyAuthority("ROLE_ADMIN", "ROLE_CASHIER_STAFF", "ROLE_USER")
+                        .requestMatchers("/api/concessions/**")
+                        .hasAuthority("ROLE_ADMIN")
+                        // Các URL khác thì cần đăng nhập
+                        .anyRequest().authenticated()
+                )
+
+                .formLogin(login -> login
+                        .loginPage("/login")
+                        .loginProcessingUrl("/login")
+                        .failureUrl("/login?error")
+                        .successHandler((request, response, authentication) -> {
+                            var roles = authentication.getAuthorities().stream()
+                                    .map(r -> r.getAuthority())
+                                    .toList();
+
+                            if (roles.contains("ROLE_ADMIN")) {
+                                response.sendRedirect("/dashboard");
+                            } else if (roles.contains("ROLE_STAFF")
+                                    || roles.contains("ROLE_CASHIER_STAFF")) {
+                                response.sendRedirect("/cashier/showtimes");
+                            } else if (roles.contains("ROLE_REDEMPTION_STAFF")) {
+                                response.sendRedirect("/staffs/checkIn_Ticket");
+                            } else {
+                                response.sendRedirect("/homepage");
+                            }
+                        })
+                        .permitAll()
+                )
+
+                .logout(logout -> logout
+                        .logoutUrl("/logout")
+                        // nếu muốn user sau khi logout vẫn vào được trang guest, cho về homepage
+                        .logoutSuccessUrl("/homepage")
+                        .invalidateHttpSession(true)
+                        .deleteCookies("JSESSIONID")
+                        .clearAuthentication(true)
+                        .permitAll()
+                )
+
+                // tuỳ nhu cầu API/form, tạm tắt cho đơn giản
+                .csrf(csrf -> csrf.disable());
+
+        return http.build();
+    }
+}

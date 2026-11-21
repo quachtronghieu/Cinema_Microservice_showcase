@@ -1,0 +1,20 @@
+# Copy to booking-local.properties (ignored by Git) and set local credentials.
+# Load with --spring.config.additional-location=file:./booking-local.properties (working directory = repository root).
+# Provision once in SSMS (choose your own passwords, never commit them):
+#   CREATE DATABASE booking_db;
+#   CREATE LOGIN booking_migrator WITH PASSWORD = '<strong password>';
+#   CREATE LOGIN booking_app      WITH PASSWORD = '<strong password>';
+#   USE booking_db;
+#   CREATE USER booking_migrator FOR LOGIN booking_migrator; ALTER ROLE db_owner ADD MEMBER booking_migrator;
+#   CREATE USER booking_app      FOR LOGIN booking_app;      ALTER ROLE db_datareader ADD MEMBER booking_app; ALTER ROLE db_datawriter ADD MEMBER booking_app;
+spring.datasource.url=jdbc:sqlserver://localhost:1433;databaseName=booking_db;encrypt=true;trustServerCertificate=true
+spring.datasource.username=booking_app
+spring.datasource.password=<set locally>
+spring.flyway.url=jdbc:sqlserver://localhost:1433;databaseName=booking_db;encrypt=true;trustServerCertificate=true
+spring.flyway.user=booking_migrator
+spring.flyway.password=<set locally>
+# Must match the issuer claim issued by Identity (not its HTTP address).
+booking.security.issuer=cinema-identity
+booking.security.jwk-set-uri=http://localhost:8081/.well-known/jwks.json
+# Enable the demo payment simulator on this local machine only.
+booking.demo-payment.enabled=true

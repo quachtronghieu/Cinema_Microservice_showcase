@@ -1,0 +1,1322 @@
+{
+  "info": {
+    "name": "Cinema E2E - Booking flow (customer to admin check-in)",
+    "description": "Luồng đầy đủ qua Gateway: phim -> suất hôm nay -> sơ đồ ghế -> giữ ghế -> tóm tắt -> tạo đơn -> thanh toán demo -> vé -> admin check-in, kèm thanh toán thất bại, huỷ đơn, bỏ giữ ghế và lỗi đầu vào.\n\nCần: 6 service đang chạy, booking.demo-payment.enabled=true, một suất OPEN của movieId chưa bắt đầu trong hôm nay (giờ Việt Nam) còn ít nhất 8 ghế trống.\nTrước khi chạy: đặt Current value cho password và adminPassword trong tab Variables (không lưu mật khẩu vào file). Chạy cả collection theo thứ tự; mỗi lần chạy bán 2 ghế.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{e2eToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "username",
+      "value": "Tuongvy1"
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "adminUsername",
+      "value": "vyltt12"
+    },
+    {
+      "key": "adminPassword",
+      "value": ""
+    },
+    {
+      "key": "e2eMovieId",
+      "value": "MV000005"
+    },
+    {
+      "key": "e2eVoucherCode",
+      "value": "SU25"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Chuẩn bị: đăng nhập, chọn suất, ghế, món",
+      "description": "Chạy đầu tiên. Lưu token, suất chiếu, ghế và món ăn vào biến của collection.",
+      "item": [
+        {
+          "name": "Đăng nhập USER",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('password is set', () => pm.expect(pm.variables.get('password'), 'Set collection variable password').to.not.be.empty);",
+                  "const b = pm.response.json();",
+                  "pm.test('200 USER token with customer account', () => { pm.response.to.have.status(200); pm.expect(b.roles).to.include('USER'); pm.expect(b.accountType).to.eql('CUSTOMER'); });",
+                  "pm.collectionVariables.set('e2eToken', b.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"username\":\"{{username}}\",\"password\":\"{{password}}\"}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Phim đang chiếu có phim cần test",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('movie is now showing', () => pm.expect(pm.response.json().items.map(m => m.movieId)).to.include(pm.collectionVariables.get('e2eMovieId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/movies?status=now-showing&size=100",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Suất chiếu hôm nay của phim -> chọn suất chưa bắt đầu",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('e2eToday', new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "// showDate/startTime are Vietnam wall-clock time (UTC+7).",
+                  "const upcoming = pm.response.json().filter(s => s.salesStatus === 'OPEN' && new Date(s.showDate + 'T' + s.startTime + '+07:00') > new Date());",
+                  "pm.test('an OPEN showtime later today exists (create one if this fails)', () => pm.expect(upcoming.length).to.be.above(0));",
+                  "if (upcoming.length) pm.collectionVariables.set('e2eShowtimeId', upcoming[0].showtimeId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/showtimes?movieId={{e2eMovieId}}&date={{e2eToday}}",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Sơ đồ phòng (cinema)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 with seats', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().seats.length).to.be.above(0); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/showtimes/{{e2eShowtimeId}}/seats",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Ghế trống (booking) -> lấy 8 ghế cho các luồng",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.test('200 OPEN', () => { pm.response.to.have.status(200); pm.expect(b.salesStatus).to.eql('OPEN'); });",
+                  "const free = b.seats.filter(s => s.status === 'AVAILABLE').map(s => s.showtimeSeatId);",
+                  "pm.test('at least 8 free seats', () => pm.expect(free.length).to.be.at.least(8));",
+                  "['A', 'B', 'C', 'D'].forEach((k, i) => pm.collectionVariables.set('e2eSeats' + k, JSON.stringify(free.slice(i * 2, i * 2 + 2))));",
+                  "pm.collectionVariables.set('e2eNineSeats', JSON.stringify(b.seats.slice(0, 9).map(s => s.showtimeSeatId)));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/showtimes/{{e2eShowtimeId}}/seat-availability",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Danh sách đồ ăn -> chọn 1 món đang bán",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const items = pm.response.json().items.filter(c => c.active);",
+                  "pm.test('200 with an active concession', () => { pm.response.to.have.status(200); pm.expect(items.length).to.be.above(0); });",
+                  "if (items.length) pm.collectionVariables.set('e2eConcessionId', items[0].concessionId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/concessions",
+            "header": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Mua vé thành công",
+      "description": "Giữ ghế -> tóm tắt -> tạo đơn (chống gửi trùng) -> thanh toán -> đơn -> vé.",
+      "item": [
+        {
+          "name": "Giữ 2 ghế -> 201",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.test('201 hold created', () => pm.response.to.have.status(201));",
+                  "pm.test('holds exactly the chosen seats', () => pm.expect([...b.seatIds].sort()).to.eql(JSON.parse(pm.collectionVariables.get('e2eSeatsA')).sort()));",
+                  "pm.test('expires in about 5 minutes', () => pm.expect((new Date(b.expiresAt) - new Date(b.serverTime)) / 60000).to.be.within(4.9, 5.1));",
+                  "pm.collectionVariables.set('e2eHoldA', b.holdId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/seat-holds",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsA}}}"
+            }
+          }
+        },
+        {
+          "name": "Ghế vừa giữ -> HELD",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const seats = pm.response.json().seats;",
+                  "const mine = JSON.parse(pm.collectionVariables.get('e2eSeatsA'));",
+                  "pm.test('seats are HELD', () => mine.forEach(id => pm.expect(seats.find(s => s.showtimeSeatId === id).status).to.eql('HELD')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/showtimes/{{e2eShowtimeId}}/seat-availability",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Xem tóm tắt đơn (giá do server tính)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const n = v => Math.round(Number(v) * 100) / 100;",
+                  "const b = pm.response.json();",
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('2 seats + 1 concession', () => { pm.expect(b.ticketItems.length).to.eql(2); pm.expect(b.concessionItems.length).to.eql(1); });",
+                  "pm.test('subtotal = tickets + concessions', () => pm.expect(n(b.subtotal)).to.eql(n(n(b.ticketSubtotal) + n(b.concessionSubtotal))));",
+                  "pm.test('total = subtotal - discount', () => pm.expect(n(b.total)).to.eql(n(n(b.subtotal) - n(b.discountAmount))));",
+                  "pm.collectionVariables.set('e2ePreviewTotalA', b.total);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings/preview",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"holdId\":\"{{e2eHoldA}}\",\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsA}},\"concessions\":[{\"concessionId\":\"{{e2eConcessionId}}\",\"quantity\":1}],\"voucherCode\":\"{{e2eVoucherCode}}\"}"
+            }
+          }
+        },
+        {
+          "name": "Tạo đơn -> 201 PENDING_PAYMENT",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('e2eKeyA', 'e2e-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const n = v => Math.round(Number(v) * 100) / 100;",
+                  "const b = pm.response.json();",
+                  "pm.test('201 PENDING_PAYMENT', () => { pm.response.to.have.status(201); pm.expect(b.status).to.eql('PENDING_PAYMENT'); });",
+                  "pm.test('same total as preview', () => pm.expect(n(b.totalAmount)).to.eql(n(pm.collectionVariables.get('e2ePreviewTotalA'))));",
+                  "pm.test('payment window about 5 minutes', () => pm.expect((new Date(b.expiresAt) - Date.now()) / 60000).to.be.within(3.5, 5.5));",
+                  "pm.collectionVariables.set('e2eBookingA', b.bookingId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{e2eKeyA}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"holdId\":\"{{e2eHoldA}}\",\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsA}},\"concessions\":[{\"concessionId\":\"{{e2eConcessionId}}\",\"quantity\":1}],\"voucherCode\":\"{{e2eVoucherCode}}\"}"
+            }
+          }
+        },
+        {
+          "name": "Gửi lại cùng key + cùng body -> 200 cùng đơn",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 replay, same booking', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().bookingId).to.eql(pm.collectionVariables.get('e2eBookingA')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{e2eKeyA}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"holdId\":\"{{e2eHoldA}}\",\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsA}},\"concessions\":[{\"concessionId\":\"{{e2eConcessionId}}\",\"quantity\":1}],\"voucherCode\":\"{{e2eVoucherCode}}\"}"
+            }
+          }
+        },
+        {
+          "name": "Cùng key + body khác -> 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 IDEMPOTENCY_KEY_REUSED', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('IDEMPOTENCY_KEY_REUSED'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{e2eKeyA}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"holdId\":\"{{e2eHoldA}}\",\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsA}},\"concessions\":[],\"voucherCode\":null}"
+            }
+          }
+        },
+        {
+          "name": "Thanh toán demo SUCCESS -> 200 + vé",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const n = v => Math.round(Number(v) * 100) / 100;",
+                  "const b = pm.response.json();",
+                  "pm.test('200 SUCCEEDED with a ticket', () => { pm.response.to.have.status(200); pm.expect(b.paymentStatus).to.eql('SUCCEEDED'); pm.expect(b.ticketId).to.be.a('string'); });",
+                  "pm.test('charged the booking total', () => pm.expect(n(b.amount)).to.eql(n(pm.collectionVariables.get('e2ePreviewTotalA'))));",
+                  "pm.collectionVariables.set('e2eTicketA', b.ticketId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings/{{e2eBookingA}}/demo-payment",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"outcome\":\"SUCCESS\"}"
+            }
+          }
+        },
+        {
+          "name": "Bấm thanh toán lần nữa -> 200 cùng vé",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 same ticket, no second ticket', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().ticketId).to.eql(pm.collectionVariables.get('e2eTicketA')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings/{{e2eBookingA}}/demo-payment",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"outcome\":\"SUCCESS\"}"
+            }
+          }
+        },
+        {
+          "name": "Ghế đã bán -> SOLD",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const seats = pm.response.json().seats;",
+                  "const mine = JSON.parse(pm.collectionVariables.get('e2eSeatsA'));",
+                  "pm.test('seats are SOLD', () => mine.forEach(id => pm.expect(seats.find(s => s.showtimeSeatId === id).status).to.eql('SOLD')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/showtimes/{{e2eShowtimeId}}/seat-availability",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Danh sách đơn đã mua có đơn này",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200, paid booking listed', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().items.map(b => b.bookingId)).to.include(pm.collectionVariables.get('e2eBookingA')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/customer/bookings?page=0&size=100",
+            "header": []
+          }
+        },
+        {
+          "name": "Chi tiết đơn -> PAID, có payment và vé",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.test('200 PAID', () => { pm.response.to.have.status(200); pm.expect(b.status).to.eql('PAID'); });",
+                  "pm.test('payment SUCCEEDED and ticket id', () => { pm.expect(b.payment.status).to.eql('SUCCEEDED'); pm.expect(b.ticketId).to.eql(pm.collectionVariables.get('e2eTicketA')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/customer/bookings/{{e2eBookingA}}",
+            "header": []
+          }
+        },
+        {
+          "name": "Vé của tôi có vé này",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200, ticket listed', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().map(t => t.ticketId)).to.include(pm.collectionVariables.get('e2eTicketA')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/customer/tickets",
+            "header": []
+          }
+        },
+        {
+          "name": "Chi tiết vé -> VALID + QR",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const t = pm.response.json();",
+                  "pm.test('200 VALID, not checked in', () => { pm.response.to.have.status(200); pm.expect(t.status).to.eql('VALID'); pm.expect(t.checkedIn).to.eql(false); });",
+                  "pm.test('2 seats on the ticket', () => pm.expect(t.seatLabels.length).to.eql(2));",
+                  "pm.test('QR holds only the ticket id', () => pm.expect(t.qrPayload).to.eql('CINEMA-TICKET:' + t.ticketId));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/customer/tickets/{{e2eTicketA}}",
+            "header": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Admin check-in vé",
+      "description": "Cần biến adminPassword (tài khoản ADMIN có staffId).",
+      "item": [
+        {
+          "name": "USER không được check-in -> 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/admin/tickets/{{e2eTicketA}}/check-in",
+            "header": []
+          }
+        },
+        {
+          "name": "Đăng nhập ADMIN",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('adminPassword is set', () => pm.expect(pm.variables.get('adminPassword'), 'Set collection variable adminPassword').to.not.be.empty);",
+                  "const b = pm.response.json();",
+                  "pm.test('200 ADMIN token', () => { pm.response.to.have.status(200); pm.expect(b.roles).to.include('ADMIN'); });",
+                  "pm.collectionVariables.set('e2eAdminToken', b.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"username\":\"{{adminUsername}}\",\"password\":\"{{adminPassword}}\"}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "ADMIN check-in -> 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.test('200 with who and when', () => { pm.response.to.have.status(200); pm.expect(b.ticketId).to.eql(pm.collectionVariables.get('e2eTicketA')); pm.expect(b.checkedInBy).to.be.a('string'); pm.expect(b.checkedInAt).to.be.a('string'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/admin/tickets/{{e2eTicketA}}/check-in",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{e2eAdminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Check-in lần 2 -> 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 TICKET_ALREADY_CHECKED_IN', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('TICKET_ALREADY_CHECKED_IN'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/admin/tickets/{{e2eTicketA}}/check-in",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{e2eAdminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Khách xem lại vé -> CHECKED_IN",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('CHECKED_IN', () => { pm.expect(pm.response.json().status).to.eql('CHECKED_IN'); pm.expect(pm.response.json().checkedIn).to.eql(true); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/customer/tickets/{{e2eTicketA}}",
+            "header": []
+          }
+        },
+        {
+          "name": "Vé không tồn tại -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('404 TICKET_NOT_FOUND', () => { pm.response.to.have.status(404); pm.expect(pm.response.json().code).to.eql('TICKET_NOT_FOUND'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/admin/tickets/no-such-ticket/check-in",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{e2eAdminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Thanh toán thất bại trả ghế",
+      "description": "",
+      "item": [
+        {
+          "name": "Giữ 2 ghế khác -> 201",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.test('201 hold created', () => pm.response.to.have.status(201));",
+                  "pm.test('holds exactly the chosen seats', () => pm.expect([...b.seatIds].sort()).to.eql(JSON.parse(pm.collectionVariables.get('e2eSeatsB')).sort()));",
+                  "pm.test('expires in about 5 minutes', () => pm.expect((new Date(b.expiresAt) - new Date(b.serverTime)) / 60000).to.be.within(4.9, 5.1));",
+                  "pm.collectionVariables.set('e2eHoldB', b.holdId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/seat-holds",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsB}}}"
+            }
+          }
+        },
+        {
+          "name": "Tạo đơn -> 201",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('e2eKeyB', 'e2e-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.test('201 PENDING_PAYMENT', () => { pm.response.to.have.status(201); pm.expect(b.status).to.eql('PENDING_PAYMENT'); });",
+                  "pm.collectionVariables.set('e2eBookingB', b.bookingId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{e2eKeyB}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"holdId\":\"{{e2eHoldB}}\",\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsB}},\"concessions\":[],\"voucherCode\":null}"
+            }
+          }
+        },
+        {
+          "name": "Thanh toán demo FAILED -> 200, không có vé",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.test('200 FAILED without ticket', () => { pm.response.to.have.status(200); pm.expect(b.paymentStatus).to.eql('FAILED'); pm.expect(b.ticketId).to.be.oneOf([null, undefined]); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings/{{e2eBookingB}}/demo-payment",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"outcome\":\"FAILED\"}"
+            }
+          }
+        },
+        {
+          "name": "Thanh toán SUCCESS sau khi FAILED -> 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 BOOKING_NOT_PAYABLE', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('BOOKING_NOT_PAYABLE'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings/{{e2eBookingB}}/demo-payment",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"outcome\":\"SUCCESS\"}"
+            }
+          }
+        },
+        {
+          "name": "Ghế đã trả lại -> AVAILABLE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const seats = pm.response.json().seats;",
+                  "const mine = JSON.parse(pm.collectionVariables.get('e2eSeatsB'));",
+                  "pm.test('seats are AVAILABLE', () => mine.forEach(id => pm.expect(seats.find(s => s.showtimeSeatId === id).status).to.eql('AVAILABLE')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/showtimes/{{e2eShowtimeId}}/seat-availability",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Đơn chưa thanh toán không xem chi tiết được -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('404 BOOKING_NOT_PAID', () => { pm.response.to.have.status(404); pm.expect(pm.response.json().code).to.eql('BOOKING_NOT_PAID'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/customer/bookings/{{e2eBookingB}}",
+            "header": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Huỷ đơn chưa thanh toán",
+      "description": "",
+      "item": [
+        {
+          "name": "Giữ 2 ghế -> 201",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.test('201 hold created', () => pm.response.to.have.status(201));",
+                  "pm.test('holds exactly the chosen seats', () => pm.expect([...b.seatIds].sort()).to.eql(JSON.parse(pm.collectionVariables.get('e2eSeatsC')).sort()));",
+                  "pm.test('expires in about 5 minutes', () => pm.expect((new Date(b.expiresAt) - new Date(b.serverTime)) / 60000).to.be.within(4.9, 5.1));",
+                  "pm.collectionVariables.set('e2eHoldC', b.holdId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/seat-holds",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsC}}}"
+            }
+          }
+        },
+        {
+          "name": "Tạo đơn -> 201",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('e2eKeyC', 'e2e-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.test('201 PENDING_PAYMENT', () => { pm.response.to.have.status(201); pm.expect(b.status).to.eql('PENDING_PAYMENT'); });",
+                  "pm.collectionVariables.set('e2eBookingC', b.bookingId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{e2eKeyC}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"holdId\":\"{{e2eHoldC}}\",\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsC}},\"concessions\":[],\"voucherCode\":null}"
+            }
+          }
+        },
+        {
+          "name": "Huỷ đơn -> 200 CANCELLED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 CANCELLED', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('CANCELLED'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings/{{e2eBookingC}}/cancel",
+            "header": []
+          }
+        },
+        {
+          "name": "Huỷ lần nữa -> vẫn 200 CANCELLED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 CANCELLED again', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('CANCELLED'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings/{{e2eBookingC}}/cancel",
+            "header": []
+          }
+        },
+        {
+          "name": "Ghế đã trả lại -> AVAILABLE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const seats = pm.response.json().seats;",
+                  "const mine = JSON.parse(pm.collectionVariables.get('e2eSeatsC'));",
+                  "pm.test('seats are AVAILABLE', () => mine.forEach(id => pm.expect(seats.find(s => s.showtimeSeatId === id).status).to.eql('AVAILABLE')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/showtimes/{{e2eShowtimeId}}/seat-availability",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Thanh toán đơn đã huỷ -> 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 BOOKING_NOT_PAYABLE', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('BOOKING_NOT_PAYABLE'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings/{{e2eBookingC}}/demo-payment",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"outcome\":\"SUCCESS\"}"
+            }
+          }
+        },
+        {
+          "name": "Huỷ đơn đã thanh toán -> 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 BOOKING_NOT_CANCELLABLE', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('BOOKING_NOT_CANCELLABLE'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings/{{e2eBookingA}}/cancel",
+            "header": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Bỏ giữ ghế",
+      "description": "",
+      "item": [
+        {
+          "name": "Giữ 2 ghế -> 201",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.test('201 hold created', () => pm.response.to.have.status(201));",
+                  "pm.test('holds exactly the chosen seats', () => pm.expect([...b.seatIds].sort()).to.eql(JSON.parse(pm.collectionVariables.get('e2eSeatsD')).sort()));",
+                  "pm.test('expires in about 5 minutes', () => pm.expect((new Date(b.expiresAt) - new Date(b.serverTime)) / 60000).to.be.within(4.9, 5.1));",
+                  "pm.collectionVariables.set('e2eHoldD', b.holdId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/seat-holds",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsD}}}"
+            }
+          }
+        },
+        {
+          "name": "Bỏ giữ ghế -> 204",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/v1/customer/seat-holds/{{e2eHoldD}}",
+            "header": []
+          }
+        },
+        {
+          "name": "Ghế đã trả lại -> AVAILABLE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const seats = pm.response.json().seats;",
+                  "const mine = JSON.parse(pm.collectionVariables.get('e2eSeatsD'));",
+                  "pm.test('seats are AVAILABLE', () => mine.forEach(id => pm.expect(seats.find(s => s.showtimeSeatId === id).status).to.eql('AVAILABLE')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/showtimes/{{e2eShowtimeId}}/seat-availability",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Tạo đơn từ hold đã bỏ -> 409",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('e2eKeyD', 'e2e-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 hold no longer usable', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{e2eKeyD}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"holdId\":\"{{e2eHoldD}}\",\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsD}},\"concessions\":[],\"voucherCode\":null}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Lỗi đầu vào và quyền",
+      "description": "",
+      "item": [
+        {
+          "name": "Không có token -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/seat-holds",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsD}}}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Giữ 9 ghế -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/seat-holds",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eNineSeats}}}"
+            }
+          }
+        },
+        {
+          "name": "Tạo đơn thiếu Idempotency-Key -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/bookings",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"holdId\":\"{{e2eHoldD}}\",\"showtimeId\":\"{{e2eShowtimeId}}\",\"showtimeSeatIds\":{{e2eSeatsD}},\"concessions\":[],\"voucherCode\":null}"
+            }
+          }
+        },
+        {
+          "name": "Suất chiếu không tồn tại -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('404 SHOWTIME_NOT_FOUND', () => { pm.response.to.have.status(404); pm.expect(pm.response.json().code).to.eql('SHOWTIME_NOT_FOUND'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/customer/seat-holds",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"showtimeId\":\"no-such-showtime\",\"showtimeSeatIds\":[\"x\"]}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+# Dependencies and build output
+target/
+**/target/
+Cinema_Management/target/
+cinema_booking_app/.dart_tool/
+cinema_booking_app/build/
+
+# Environment-specific secrets and local configuration
+.env
+*.env
+**/.env
+*.pem
+*.key
+
+# IDE and operating-system files
+.idea/
+**/.idea/
+.vscode/
+*.iml
+.DS_Store
+*.log
+
+# Legacy Git metadata left by tooling during repository migration
+Cinema_Management/.git.detached/
+
+# Local configuration and personal documents
+/catalog-local.properties
+/docs/engineering-lessons.md
+/AGENTS (1).md
+/MSS301_Backlog.xlsx
+*.class
+
+# Superpowers plan workspaces (local scratch)
+.superpowers/
+# Local booking-service credentials
+/booking-local.properties
+# Local cinema-service credentials
+/cinema-local.properties
+# Local test database credentials (booking-service DB tests)
+/booking-it.properties
+# Generated local Postman environment (holds + customer password)
+/docs/postman/booking-local.postman_environment.json

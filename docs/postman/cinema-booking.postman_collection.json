@@ -1,0 +1,802 @@
+{
+  "info": {
+    "name": "Cinema Booking - Booking, Payment, Tickets & Check-in",
+    "description": "Run docs/postman/prepare-booking-tests.ps1 first (fresh holds + voucher), import booking-local.postman_environment.json, select it, then Run collection in order. Requests 15-23 need booking.demo-payment.enabled=true and an ADMIN account (adminUsername/adminPassword).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "previewTotalA",
+      "value": ""
+    },
+    {
+      "key": "bookingIdA",
+      "value": ""
+    },
+    {
+      "key": "previewTotalB",
+      "value": ""
+    },
+    {
+      "key": "keyA",
+      "value": ""
+    },
+    {
+      "key": "ticketIdA",
+      "value": ""
+    },
+    {
+      "key": "adminToken",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Login USER",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200 USER token', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().roles).to.include('USER'); });",
+              "pm.collectionVariables.set('token', pm.response.json().accessToken);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{loginUrl}}/api/v1/auth/login",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"username\":\"{{username}}\",\"password\":\"{{password}}\"}"
+        },
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    },
+    {
+      "name": "02 Preview hold A -> 200, server totals",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const n = v => Math.round(Number(v) * 100) / 100;",
+              "const b = pm.response.json();",
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('2 seats, Coca x2 = 90000', () => { pm.expect(b.ticketItems.length).to.eql(2); pm.expect(n(b.concessionSubtotal)).to.eql(90000); });",
+              "pm.test('total = subtotal - discount', () => pm.expect(n(b.total)).to.eql(n(b.subtotal) - n(b.discountAmount)));",
+              "pm.collectionVariables.set('previewTotalA', b.total);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings/preview",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdA}}\",\"showtimeId\":\"{{showtimeA}}\",\"showtimeSeatIds\":{{seatsA}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "03 Create booking A -> 201 PENDING_PAYMENT",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "pm.collectionVariables.set('keyA', 'pm-' + pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const n = v => Math.round(Number(v) * 100) / 100;",
+              "const b = pm.response.json();",
+              "pm.test('201 + Location', () => { pm.response.to.have.status(201); pm.expect(pm.response.headers.get('Location')).to.include(b.bookingId); });",
+              "pm.test('PENDING_PAYMENT, same total as preview', () => { pm.expect(b.status).to.eql('PENDING_PAYMENT'); pm.expect(n(b.totalAmount)).to.eql(n(pm.collectionVariables.get('previewTotalA'))); });",
+              "pm.test('pay within about 5 minutes', () => { const m = (new Date(b.expiresAt) - Date.now()) / 60000; pm.expect(m).to.be.within(4, 6); });",
+              "pm.collectionVariables.set('bookingIdA', b.bookingId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{keyA}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdA}}\",\"showtimeId\":\"{{showtimeA}}\",\"showtimeSeatIds\":{{seatsA}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "04a Same Idempotency-Key + same body -> 200 same booking",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200 replay of the same booking', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().bookingId).to.eql(pm.collectionVariables.get('bookingIdA')); pm.expect(pm.response.json().status).to.eql('PENDING_PAYMENT'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{keyA}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdA}}\",\"showtimeId\":\"{{showtimeA}}\",\"showtimeSeatIds\":{{seatsA}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "04b New key, same (used) hold -> 409",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('409 HOLD_EXPIRED', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('HOLD_EXPIRED'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdA}}\",\"showtimeId\":\"{{showtimeA}}\",\"showtimeSeatIds\":{{seatsA}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "04c Same key + different body -> 409",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('409 IDEMPOTENCY_KEY_REUSED', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('IDEMPOTENCY_KEY_REUSED'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{keyA}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdA}}\",\"showtimeId\":\"{{showtimeA}}\",\"showtimeSeatIds\":{{seatsA}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":3}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "04d Missing Idempotency-Key -> 400",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('400 IDEMPOTENCY_KEY_INVALID', () => { pm.response.to.have.status(400); pm.expect(pm.response.json().code).to.eql('IDEMPOTENCY_KEY_INVALID'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdA}}\",\"showtimeId\":\"{{showtimeA}}\",\"showtimeSeatIds\":{{seatsA}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "05 Preview a consumed hold -> 409",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('409 HOLD_EXPIRED', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('HOLD_EXPIRED'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings/preview",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdA}}\",\"showtimeId\":\"{{showtimeA}}\",\"showtimeSeatIds\":{{seatsA}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "06 Expired hold -> 409",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('409 HOLD_EXPIRED', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('HOLD_EXPIRED'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdExpired}}\",\"showtimeId\":\"{{showtimeExpired}}\",\"showtimeSeatIds\":{{seatsExpired}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "07 Another customer's hold -> 403",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('403 HOLD_NOT_OWNED', () => { pm.response.to.have.status(403); pm.expect(pm.response.json().code).to.eql('HOLD_NOT_OWNED'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdOther}}\",\"showtimeId\":\"{{showtimeOther}}\",\"showtimeSeatIds\":{{seatsOther}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "08 Seats differ from the hold -> 409",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('409 HOLD_SELECTION_MISMATCH', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('HOLD_SELECTION_MISMATCH'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdB}}\",\"showtimeId\":\"{{showtimeB}}\",\"showtimeSeatIds\":[\"{{seatB1}}\",\"NOT-HELD-SEAT\"],\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "09 Inactive concession -> 409",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('409 CONCESSION_UNAVAILABLE', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('CONCESSION_UNAVAILABLE'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdB}}\",\"showtimeId\":\"{{showtimeB}}\",\"showtimeSeatIds\":{{seatsB}},\"concessions\":[{\"concessionId\":\"PC000003\",\"quantity\":2}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "10 Preview hold B with voucher -> 10% off",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const n = v => Math.round(Number(v) * 100) / 100;",
+              "const b = pm.response.json();",
+              "pm.test('200 voucher applied', () => { pm.response.to.have.status(200); pm.expect(b.voucher.code).to.eql(pm.environment.get('voucherCode')); });",
+              "pm.test('discount = 10% of subtotal', () => pm.expect(n(b.discountAmount)).to.eql(n(n(b.subtotal) * 0.10)));",
+              "pm.collectionVariables.set('previewTotalB', b.total);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings/preview",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdB}}\",\"showtimeId\":\"{{showtimeB}}\",\"showtimeSeatIds\":{{seatsB}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":\"{{voucherCode}}\"}"
+        }
+      }
+    },
+    {
+      "name": "11 Create booking B with voucher -> 201",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const n = v => Math.round(Number(v) * 100) / 100;",
+              "const b = pm.response.json();",
+              "pm.test('201 discounted total', () => { pm.response.to.have.status(201); pm.expect(n(b.totalAmount)).to.eql(n(pm.collectionVariables.get('previewTotalB'))); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdB}}\",\"showtimeId\":\"{{showtimeB}}\",\"showtimeSeatIds\":{{seatsB}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":\"{{voucherCode}}\"}"
+        }
+      }
+    },
+    {
+      "name": "12 Voucher already used up -> 409",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('409 VOUCHER_UNAVAILABLE', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('VOUCHER_UNAVAILABLE'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings/preview",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdC}}\",\"showtimeId\":\"{{showtimeC}}\",\"showtimeSeatIds\":{{seatsC}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":\"{{voucherCode}}\"}"
+        }
+      }
+    },
+    {
+      "name": "13 No token -> 401",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('401 UNAUTHORIZED', () => { pm.response.to.have.status(401); pm.expect(pm.response.json().code).to.eql('UNAUTHORIZED'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdC}}\",\"showtimeId\":\"{{showtimeC}}\",\"showtimeSeatIds\":{{seatsC}},\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":null}"
+        },
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    },
+    {
+      "name": "14 More than 8 seats -> 400",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('400 field error', () => { pm.response.to.have.status(400); pm.expect(pm.response.json().fieldErrors).to.have.property('showtimeSeatIds'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"holdId\":\"{{holdC}}\",\"showtimeId\":\"{{showtimeC}}\",\"showtimeSeatIds\":[\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\"],\"concessions\":[{\"concessionId\":\"DR000002\",\"quantity\":2}],\"voucherCode\":null}"
+        }
+      }
+    },
+    {
+      "name": "15 Pay booking A (demo SUCCESS) -> 200 + ticket",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('200 SUCCEEDED with a ticket', () => { pm.response.to.have.status(200); pm.expect(b.paymentStatus).to.eql('SUCCEEDED'); pm.expect(b.ticketId).to.be.a('string'); });",
+              "pm.collectionVariables.set('ticketIdA', b.ticketId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/customer/bookings/{{bookingIdA}}/demo-payment",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"outcome\":\"SUCCESS\"}"
+        }
+      }
+    },
+    {
+      "name": "16 My tickets include ticket A",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200, ticket A listed', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().map(t => t.ticketId)).to.include(pm.collectionVariables.get('ticketIdA')); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/customer/tickets",
+        "header": []
+      }
+    },
+    {
+      "name": "17 Ticket A detail -> VALID + QR payload",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const t = pm.response.json();",
+              "pm.test('200 VALID', () => { pm.response.to.have.status(200); pm.expect(t.status).to.eql('VALID'); pm.expect(t.checkedIn).to.eql(false); });",
+              "pm.test('QR holds only the ticket id', () => pm.expect(t.qrPayload).to.eql('CINEMA-TICKET:' + t.ticketId));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/customer/tickets/{{ticketIdA}}",
+        "header": []
+      }
+    },
+    {
+      "name": "18 USER cannot check in -> 403",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('403', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/admin/tickets/{{ticketIdA}}/check-in",
+        "header": []
+      }
+    },
+    {
+      "name": "19 Login ADMIN",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200 ADMIN token', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().roles).to.include('ADMIN'); });",
+              "pm.collectionVariables.set('adminToken', pm.response.json().accessToken);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{loginUrl}}/api/v1/auth/login",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"username\":\"{{adminUsername}}\",\"password\":\"{{adminPassword}}\"}"
+        },
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    },
+    {
+      "name": "20 ADMIN checks in ticket A -> 200",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('200 with who and when', () => { pm.response.to.have.status(200); pm.expect(b.ticketId).to.eql(pm.collectionVariables.get('ticketIdA')); pm.expect(b.checkedInBy).to.be.a('string'); pm.expect(b.checkedInAt).to.be.a('string'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/admin/tickets/{{ticketIdA}}/check-in",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "21 Check in again -> 409 TICKET_ALREADY_CHECKED_IN",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('409 single use', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('TICKET_ALREADY_CHECKED_IN'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/admin/tickets/{{ticketIdA}}/check-in",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "22 Customer sees ticket A CHECKED_IN",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('CHECKED_IN', () => { pm.expect(pm.response.json().status).to.eql('CHECKED_IN'); pm.expect(pm.response.json().checkedIn).to.eql(true); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/customer/tickets/{{ticketIdA}}",
+        "header": []
+      }
+    },
+    {
+      "name": "23 Unknown ticket -> 404",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('404 TICKET_NOT_FOUND', () => { pm.response.to.have.status(404); pm.expect(pm.response.json().code).to.eql('TICKET_NOT_FOUND'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/admin/tickets/no-such-ticket/check-in",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

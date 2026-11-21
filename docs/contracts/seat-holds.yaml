@@ -1,0 +1,298 @@
+openapi: 3.0.3
+info:
+  title: Cinema - Seat map, availability and seat holds
+  version: 0.1.0
+  description: |
+    DRAFT contract for Nguyen Dao Thu Ngan's tasks in docs/ngan-task-scope.md. Producer/consumer review is pending.
+    The physical layout is owned by cinema-service; availability, holds and prices per showtime are owned by booking-service.
+    The client joins the two responses by templateSeatId and sends showtimeSeatId when holding.
+    Row, adjacency and single-gap selection rules are checked in Flutter only (scope D-01), not here.
+servers:
+  - url: /
+    description: API Gateway.
+tags:
+  - name: Seat map
+  - name: Seat holds
+paths:
+  /api/v1/showtimes/{showtimeId}/seats:
+    get:
+      tags: [Seat map]
+      operationId: getShowtimeSeatMap
+      summary: Physical seat layout of the showtime's room (cinema-service)
+      description: Fixed layout only. It has no availability and no price.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ShowtimeId'
+      responses:
+        '200':
+          description: Layout sorted by row, then seat number.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShowtimeSeatMap'
+              example:
+                showtimeId: SW00023
+                movieId: MV000016
+                movieTitle: NGAN LOCAL DEMO
+                roomId: '1'
+                templateId: TM000001
+                showDate: '2026-11-06'
+                startTime: '10:00:00'
+                seats:
+                  - {templateSeatId: TS000001, rowLabel: A, seatNumber: 1, seatType: STANDARD}
+        '404':
+          description: Unknown showtime (SHOWTIME_NOT_FOUND).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CinemaError'
+  /api/v1/showtimes/{showtimeId}/seat-availability:
+    get:
+      tags: [Seat map]
+      operationId: getSeatAvailability
+      summary: Real seat inventory of one showtime (booking-service)
+      description: |
+        Public (scope D-03), and exposes no hold, booking or customer identity.
+        A seat of an expired hold can stay HELD until the server expiry job runs, a few seconds at most.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ShowtimeId'
+      responses:
+        '200':
+          description: Current inventory. Seats are never reported as AVAILABLE when the service cannot answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeatAvailability'
+              example:
+                showtimeId: SW00023
+                salesStatus: OPEN
+                serverTime: '2026-11-05T15:00:00.000Z'
+                seats:
+                  - {showtimeSeatId: HS200001, templateSeatId: TS000001, rowLabel: A, seatNumber: 1, seatType: STANDARD, status: AVAILABLE, unitPrice: 80000.00}
+        '404':
+          description: Showtime has no inventory in Booking (SHOWTIME_NOT_FOUND).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /api/v1/customer/seat-holds:
+    post:
+      tags: [Seat holds]
+      operationId: holdSeats
+      summary: Hold 1-8 seats for 5 minutes
+      description: |
+        All seats are held or none is. One customer has at most one active hold per showtime; a new request replaces
+        the previous hold atomically, and a failed replacement keeps the previous hold. Customer comes from the token.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SeatHoldRequest'
+            example:
+              showtimeId: SW00023
+              showtimeSeatIds: [HS200001, HS200002]
+      responses:
+        '201':
+          description: Hold created. Use serverTime with expiresAt for the countdown, not the device clock.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeatHold'
+              example:
+                holdId: 4c1f7f60-7a44-4f6f-9e0b-1e2d3c4b5a69
+                showtimeId: SW00023
+                seatIds: [HS200001, HS200002]
+                expiresAt: '2026-11-05T15:05:00.000Z'
+                serverTime: '2026-11-05T15:00:00.000Z'
+        '400':
+          description: VALIDATION_ERROR, INVALID_SEAT_SELECTION (duplicate seat) or INVALID_SEATS (seat outside this showtime).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Token has no customer account (CUSTOMER_ACCOUNT_REQUIRED).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Showtime has no inventory in Booking (SHOWTIME_NOT_FOUND).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: |
+            SEAT_UNAVAILABLE (seatIds lists the seats that lost), SALES_CLOSED or SHOWTIME_STARTED.
+            The client reloads availability after any 409.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeatConflictError'
+              example:
+                code: SEAT_UNAVAILABLE
+                message: Ghế không còn trống.
+                traceId: 0f3c2a
+                fieldErrors: {}
+                seatIds: [HS200002]
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /api/v1/customer/seat-holds/{holdId}:
+    delete:
+      tags: [Seat holds]
+      operationId: releaseSeatHold
+      summary: Release the caller's hold
+      description: Repeating a release, or releasing an expired hold, returns 204 without changing other seats.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: holdId
+          in: path
+          required: true
+          schema: {type: string, maxLength: 36}
+      responses:
+        '204':
+          description: Released, or already released or expired.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: HOLD_NOT_OWNED or CUSTOMER_ACCOUNT_REQUIRED.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: HOLD_NOT_FOUND.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: HOLD_ALREADY_CONSUMED. The seats now belong to a booking and stay untouched.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    ShowtimeId:
+      name: showtimeId
+      in: path
+      required: true
+      schema: {type: string, maxLength: 36}
+  responses:
+    Unauthorized:
+      description: Missing or invalid token (UNAUTHORIZED).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: Service or database unavailable; the client must not assume any seat is free.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    ShowtimeSeatMap:
+      type: object
+      required: [showtimeId, movieId, movieTitle, seats]
+      properties:
+        showtimeId: {type: string}
+        movieId: {type: string}
+        movieTitle: {type: string}
+        roomId: {type: string, nullable: true}
+        templateId: {type: string, nullable: true}
+        showDate: {type: string, format: date}
+        startTime: {type: string, example: '10:00:00'}
+        seats:
+          type: array
+          items:
+            type: object
+            required: [templateSeatId, rowLabel, seatNumber]
+            properties:
+              templateSeatId: {type: string}
+              rowLabel: {type: string}
+              seatNumber: {type: integer}
+              seatType: {type: string, enum: [STANDARD, VIP], nullable: true}
+    SeatAvailability:
+      type: object
+      required: [showtimeId, salesStatus, serverTime, seats]
+      properties:
+        showtimeId: {type: string}
+        salesStatus: {type: string, enum: [OPEN, CLOSED]}
+        serverTime: {type: string, format: date-time}
+        seats:
+          type: array
+          items:
+            type: object
+            required: [showtimeSeatId, templateSeatId, rowLabel, seatNumber, seatType, status, unitPrice]
+            properties:
+              showtimeSeatId: {type: string}
+              templateSeatId: {type: string}
+              rowLabel: {type: string}
+              seatNumber: {type: integer}
+              seatType: {type: string, enum: [STANDARD, VIP]}
+              status: {type: string, enum: [AVAILABLE, HELD, SOLD]}
+              unitPrice: {type: number, description: Display only; the booking quote decides the amount.}
+    SeatHoldRequest:
+      type: object
+      additionalProperties: false
+      required: [showtimeId, showtimeSeatIds]
+      properties:
+        showtimeId: {type: string, maxLength: 36}
+        showtimeSeatIds:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items: {type: string, maxLength: 36}
+    SeatHold:
+      type: object
+      required: [holdId, showtimeId, seatIds, expiresAt, serverTime]
+      properties:
+        holdId: {type: string}
+        showtimeId: {type: string}
+        seatIds:
+          type: array
+          items: {type: string}
+        expiresAt: {type: string, format: date-time}
+        serverTime: {type: string, format: date-time}
+    Error:
+      type: object
+      required: [code, message, traceId, fieldErrors]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        traceId: {type: string}
+        fieldErrors:
+          type: object
+          additionalProperties:
+            type: array
+            items: {type: string}
+    SeatConflictError:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+        - type: object
+          properties:
+            seatIds:
+              type: array
+              items: {type: string}
+              description: Present only for SEAT_UNAVAILABLE.
+    CinemaError:
+      type: object
+      description: Current cinema-service error shape; moving it to the common Error is tracked as scope item R-03.
+      required: [code, message]
+      properties:
+        code: {type: string}
+        message: {type: string}

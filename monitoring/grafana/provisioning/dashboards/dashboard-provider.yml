@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: 'Cinema Microservices Dashboards'
+    orgId: 1
+    folder: 'Microservices'
+    folderUid: 'cinema-microservices'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

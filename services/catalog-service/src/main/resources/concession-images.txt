@@ -1,0 +1,10 @@
+coca.png
+coca_zero.png
+pepsi.png
+pepsi_max.png
+popcorn.png
+popcorn_caramel.png
+popcorn_cheese.png
+popcorn_socola.png
+sevenup.png
+sprite.png

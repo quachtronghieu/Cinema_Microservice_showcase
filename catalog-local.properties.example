@@ -1,0 +1,12 @@
+# Copy to catalog-local.properties (ignored by Git) and set local credentials.
+# Load with --spring.config.additional-location=file:./catalog-local.properties
+spring.datasource.url=jdbc:sqlserver://localhost:1433;databaseName=catalog_db;encrypt=true;trustServerCertificate=true
+spring.datasource.username=catalog_app
+spring.datasource.password=<set-locally>
+spring.flyway.url=jdbc:sqlserver://localhost:1433;databaseName=catalog_db;encrypt=true;trustServerCertificate=true
+spring.flyway.user=catalog_migrator
+spring.flyway.password=<set-locally>
+# Must match the issuer claim issued by Identity (not its HTTP address).
+catalog.security.issuer=cinema-identity
+catalog.security.jwk-set-uri=http://localhost:8081/.well-known/jwks.json
+catalog.security.audience=cinema-api

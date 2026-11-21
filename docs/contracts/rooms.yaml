@@ -1,0 +1,191 @@
+openapi: 3.0.3
+info:
+  title: Cinema - Screening rooms (ADMIN)
+  version: 0.1.0
+  description: |
+    DRAFT contract for task 1 in docs/ngan-task-scope.md. Owner: cinema-service, cinema_db. Producer/consumer review is pending.
+    Rooms and their seat layouts are fixed. There is no API to create, delete or edit a room, change its template or edit
+    seats. ADMIN can read rooms and switch a room between ACTIVE and INACTIVE.
+    Both the Gateway and cinema-service check the ADMIN role.
+servers:
+  - url: /
+    description: API Gateway.
+security:
+  - bearerAuth: []
+tags:
+  - name: Rooms
+paths:
+  /api/v1/admin/rooms:
+    get:
+      tags: [Rooms]
+      operationId: listRooms
+      summary: List rooms, sorted by room ID
+      parameters:
+        - {name: page, in: query, schema: {type: integer, minimum: 0, default: 0}}
+        - {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      responses:
+        '200':
+          description: One page of rooms.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, size, totalElements, totalPages]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/Room'}
+                  page: {type: integer}
+                  size: {type: integer}
+                  totalElements: {type: integer, format: int64}
+                  totalPages: {type: integer}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/admin/rooms/{roomId}:
+    get:
+      tags: [Rooms]
+      operationId: getRoom
+      parameters:
+        - $ref: '#/components/parameters/RoomId'
+      responses:
+        '200':
+          description: The room.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Room'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admin/rooms/{roomId}/template:
+    get:
+      tags: [Rooms]
+      operationId: getRoomTemplate
+      summary: Fixed seat layout of the room, by row then seat number
+      parameters:
+        - $ref: '#/components/parameters/RoomId'
+      responses:
+        '200':
+          description: The layout.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RoomTemplate'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admin/rooms/{roomId}/status:
+    patch:
+      tags: [Rooms]
+      operationId: changeRoomStatus
+      summary: Switch a room between ACTIVE and INACTIVE
+      description: |
+        ACTIVE to INACTIVE is refused with 409 while a showtime of the room, whatever its sales status (DRAFT, OPEN or
+        CLOSED), has effectiveEndAt after the server time and starts before the server time plus one month (decision
+        D-05, 2026-11-07). Showtimes starting later do not block. INACTIVE to ACTIVE is always allowed.
+        effectiveEndAt is the show date plus the end time, which already includes the cleaning buffer, moved to the
+        next day when the end time is past midnight.
+        Sending the current status returns 200 and records nothing. A successful change records actor, room, old and new
+        status, UTC time and traceId. No showtime, booking or seat is cancelled or released.
+        INACTIVE rooms cannot get new showtimes, moved showtimes or Open Sales (409 ROOM_INACTIVE on those routes).
+      parameters:
+        - $ref: '#/components/parameters/RoomId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status: {type: string, enum: [ACTIVE, INACTIVE]}
+            example: {status: INACTIVE}
+      responses:
+        '200':
+          description: Current room after the change, or unchanged when the status was already the requested one.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Room'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: ROOM_HAS_UPCOMING_SHOWTIMES. The message lists up to 10 blocking showtime IDs.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    RoomId:
+      name: roomId
+      in: path
+      required: true
+      description: String form of the INT room key; a non-numeric value returns 404.
+      schema: {type: string}
+  responses:
+    BadRequest:
+      description: VALIDATION_ERROR (wrong status value, extra fields, bad paging).
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unauthorized:
+      description: UNAUTHORIZED.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Forbidden:
+      description: FORBIDDEN, for example a USER token.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    NotFound:
+      description: ROOM_NOT_FOUND.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+  schemas:
+    Room:
+      type: object
+      required: [roomId, templateId, templateName, status, capacity, standardSeats, vipSeats]
+      properties:
+        roomId: {type: string, example: '1'}
+        templateId: {type: string, example: TM000001}
+        templateName: {type: string, example: 2D}
+        status: {type: string, enum: [ACTIVE, INACTIVE]}
+        capacity: {type: integer, example: 75}
+        standardSeats: {type: integer, example: 21}
+        vipSeats: {type: integer, example: 54}
+    RoomTemplate:
+      type: object
+      required: [roomId, templateId, templateName, capacity, seats]
+      properties:
+        roomId: {type: string}
+        templateId: {type: string}
+        templateName: {type: string}
+        description: {type: string, nullable: true}
+        capacity: {type: integer}
+        seats:
+          type: array
+          items:
+            type: object
+            required: [templateSeatId, rowLabel, seatNumber]
+            properties:
+              templateSeatId: {type: string}
+              rowLabel: {type: string}
+              seatNumber: {type: integer}
+              seatType: {type: string, enum: [STANDARD, VIP], nullable: true}
+    Error:
+      type: object
+      required: [code, message, traceId, fieldErrors]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        traceId: {type: string}
+        fieldErrors:
+          type: object
+          additionalProperties:
+            type: array
+            items: {type: string}

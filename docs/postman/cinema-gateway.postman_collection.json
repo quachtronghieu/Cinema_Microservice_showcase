@@ -1,0 +1,859 @@
+{
+  "info": {
+    "name": "Cinema Gateway - Identity & Catalog",
+    "description": "Run in order with Collection Runner. Fill adminUsername/adminPassword in the collection Variables tab (Current value only, do not commit real passwords).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "adminUsername",
+      "value": "vyltt12"
+    },
+    {
+      "key": "adminPassword",
+      "value": ""
+    },
+    {
+      "key": "userUsername",
+      "value": "khach01"
+    },
+    {
+      "key": "userPassword",
+      "value": "123456"
+    },
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "userToken",
+      "value": ""
+    },
+    {
+      "key": "concessionId",
+      "value": ""
+    },
+    {
+      "key": "version",
+      "value": ""
+    },
+    {
+      "key": "staleVersion",
+      "value": ""
+    },
+    {
+      "key": "concessionName",
+      "value": ""
+    },
+    {
+      "key": "movieId",
+      "value": ""
+    },
+    {
+      "key": "movieVersion",
+      "value": "0"
+    },
+    {
+      "key": "movieImg",
+      "value": ""
+    },
+    {
+      "key": "movieReleaseDate",
+      "value": ""
+    },
+    {
+      "key": "movieTitle",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Health via gateway",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200 UP', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('UP'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/actuator/health"
+      }
+    },
+    {
+      "name": "02 Login ADMIN",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200 with ADMIN role', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().roles).to.include('ADMIN'); });",
+              "pm.collectionVariables.set('adminToken', pm.response.json().accessToken);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/auth/login",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"username\": \"{{adminUsername}}\", \"password\": \"{{adminPassword}}\" }"
+        }
+      }
+    },
+    {
+      "name": "03 Register USER (400 if already registered)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('201 created or 400 already exists', () => pm.expect(pm.response.code).to.be.oneOf([201, 400]));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/auth/register",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"username\": \"{{userUsername}}\", \"password\": \"{{userPassword}}\", \"confirmPassword\": \"{{userPassword}}\", \"email\": \"{{userUsername}}@test.com\", \"phone\": \"0900000001\", \"dob\": \"2003-01-01\", \"sex\": true }"
+        }
+      }
+    },
+    {
+      "name": "04 Login USER",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200 with USER role', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().roles).to.include('USER'); });",
+              "pm.collectionVariables.set('userToken', pm.response.json().accessToken);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/auth/login",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"username\": \"{{userUsername}}\", \"password\": \"{{userPassword}}\" }"
+        }
+      }
+    },
+    {
+      "name": "05 Me (USER)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200 own profile', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().username.toLowerCase()).to.eql(pm.collectionVariables.get('userUsername').toLowerCase()); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/auth/me",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{userToken}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "06 Customer concessions (USER) -> 200",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200 only active items', () => { pm.response.to.have.status(200); pm.response.json().items.forEach(i => pm.expect(i.active).to.eql(true)); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/concessions?page=0&size=20",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{userToken}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "07 Admin concessions, no token -> 401",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('401 UNAUTHORIZED', () => { pm.response.to.have.status(401); pm.expect(pm.response.json().code).to.eql('UNAUTHORIZED'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/admin/concessions",
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    },
+    {
+      "name": "08 Admin concessions, USER token -> 403",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('403 FORBIDDEN', () => { pm.response.to.have.status(403); pm.expect(pm.response.json().code).to.eql('FORBIDDEN'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/admin/concessions",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{userToken}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "09 Admin concessions, ADMIN token -> 200",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/admin/concessions?page=0&size=20",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "10 Create concession -> 201",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "pm.collectionVariables.set('concessionName', 'Test Popcorn ' + Date.now().toString().slice(-6));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('201 created', () => pm.response.to.have.status(201));",
+              "const b = pm.response.json();",
+              "pm.collectionVariables.set('concessionId', b.concessionId);",
+              "pm.collectionVariables.set('version', b.version);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/admin/concessions",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"type\": \"PC\", \"name\": \"{{concessionName}}\", \"description\": \"Sweet caramel popcorn\", \"price\": 65000, \"img\": \"popcorn.png\" }"
+        }
+      }
+    },
+    {
+      "name": "11 Update price -> 200, version + 1",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const old = Number(pm.collectionVariables.get('version'));",
+              "pm.test('200 and version increased', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().version).to.eql(old + 1); });",
+              "pm.collectionVariables.set('staleVersion', old);",
+              "pm.collectionVariables.set('version', pm.response.json().version);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "url": "{{baseUrl}}/api/v1/admin/concessions/{{concessionId}}",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"type\": \"PC\", \"name\": \"{{concessionName}}\", \"description\": \"Sweet caramel popcorn\", \"price\": 70000, \"img\": \"popcorn.png\", \"version\": {{version}} }"
+        }
+      }
+    },
+    {
+      "name": "12 Update with stale version -> 409",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('409 version conflict', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('CONCESSION_VERSION_CONFLICT'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "url": "{{baseUrl}}/api/v1/admin/concessions/{{concessionId}}",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}"
+            }
+          ]
+        },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"type\": \"PC\", \"name\": \"{{concessionName}}\", \"description\": \"Sweet caramel popcorn\", \"price\": 75000, \"img\": \"popcorn.png\", \"version\": {{staleVersion}} }"
+        }
+      }
+    },
+    {
+      "name": "13 Deactivate (out of stock) -> 204",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('204', () => pm.response.to.have.status(204));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "url": "{{baseUrl}}/api/v1/admin/concessions/{{concessionId}}?version={{version}}",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "14 Customer no longer sees deactivated item",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const id = pm.collectionVariables.get('concessionId');",
+              "pm.test('item hidden from customer', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().items.map(i => i.concessionId)).to.not.include(id); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/concessions?page=0&size=100",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{userToken}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "15 Public movies, no token -> 200",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('page without token', () => { pm.response.to.have.status(200); pm.expect(pm.response.json()).to.have.property('items'); pm.expect(pm.response.headers.get('X-Trace-Id')).to.match(/^[0-9a-f]{32}$/); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/movies?status=now-showing&page=0&size=20",
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    },
+    {
+      "name": "16 Admin movies, no token -> 401",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('401', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/admin/movies",
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    },
+    {
+      "name": "17 Admin movies, USER token -> 403",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('403', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/admin/movies",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{userToken}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "18 Create movie with poster -> 201 (choose an image file first)",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "const date = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);",
+              "pm.collectionVariables.set('movieReleaseDate', date);",
+              "pm.collectionVariables.set('movieTitle', 'Postman Movie ' + Date.now());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('created', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "pm.test('title stored in upper case', () => pm.expect(body.title).to.equal(pm.collectionVariables.get('movieTitle').toUpperCase()));",
+              "pm.collectionVariables.set('movieId', body.movieId);",
+              "pm.collectionVariables.set('movieVersion', body.version);",
+              "pm.collectionVariables.set('movieImg', body.img);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/admin/movies",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}"
+            }
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "title",
+              "value": "{{movieTitle}}",
+              "type": "text"
+            },
+            {
+              "key": "genre",
+              "value": "Sci-Fi, Action",
+              "type": "text"
+            },
+            {
+              "key": "summary",
+              "value": "A long enough summary for this movie.",
+              "type": "text"
+            },
+            {
+              "key": "duration",
+              "value": "120",
+              "type": "text"
+            },
+            {
+              "key": "releaseDate",
+              "value": "{{movieReleaseDate}}",
+              "type": "text"
+            },
+            {
+              "key": "ageRating",
+              "value": "T13",
+              "type": "text"
+            },
+            {
+              "key": "trailer",
+              "value": "https://youtu.be/abcdefghijk",
+              "type": "text"
+            },
+            {
+              "key": "image",
+              "type": "file",
+              "src": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "19 Poster is public -> 200",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('image', () => { pm.response.to.have.status(200); pm.expect(pm.response.headers.get('Content-Type')).to.match(/^image\\//); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}{{movieImg}}",
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    },
+    {
+      "name": "20 Search by title finds it under coming-soon",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('found', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().items.map(i => i.movieId)).to.include(pm.collectionVariables.get('movieId')); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/movies?status=coming-soon&search={{movieTitle}}",
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    },
+    {
+      "name": "21 Update without new poster -> 200, version + 1",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('updated', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('poster kept', () => pm.expect(body.img).to.equal(pm.collectionVariables.get('movieImg')));",
+              "pm.test('version incremented', () => pm.expect(body.version).to.equal(Number(pm.collectionVariables.get('movieVersion')) + 1));",
+              "pm.collectionVariables.set('staleMovieVersion', pm.collectionVariables.get('movieVersion'));",
+              "pm.collectionVariables.set('movieVersion', body.version);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "url": "{{baseUrl}}/api/v1/admin/movies/{{movieId}}",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}"
+            }
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "title",
+              "value": "{{movieTitle}} Two",
+              "type": "text"
+            },
+            {
+              "key": "genre",
+              "value": "Sci-Fi, Action",
+              "type": "text"
+            },
+            {
+              "key": "summary",
+              "value": "A long enough summary for this movie.",
+              "type": "text"
+            },
+            {
+              "key": "duration",
+              "value": "120",
+              "type": "text"
+            },
+            {
+              "key": "releaseDate",
+              "value": "{{movieReleaseDate}}",
+              "type": "text"
+            },
+            {
+              "key": "ageRating",
+              "value": "T13",
+              "type": "text"
+            },
+            {
+              "key": "trailer",
+              "value": "https://youtu.be/abcdefghijk",
+              "type": "text"
+            },
+            {
+              "key": "version",
+              "value": "{{movieVersion}}",
+              "type": "text"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "22 Update with stale version -> 409",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('conflict', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.equal('MOVIE_VERSION_CONFLICT'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "url": "{{baseUrl}}/api/v1/admin/movies/{{movieId}}",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}"
+            }
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "title",
+              "value": "{{movieTitle}} Three",
+              "type": "text"
+            },
+            {
+              "key": "genre",
+              "value": "Sci-Fi, Action",
+              "type": "text"
+            },
+            {
+              "key": "summary",
+              "value": "A long enough summary for this movie.",
+              "type": "text"
+            },
+            {
+              "key": "duration",
+              "value": "120",
+              "type": "text"
+            },
+            {
+              "key": "releaseDate",
+              "value": "{{movieReleaseDate}}",
+              "type": "text"
+            },
+            {
+              "key": "ageRating",
+              "value": "T13",
+              "type": "text"
+            },
+            {
+              "key": "trailer",
+              "value": "https://youtu.be/abcdefghijk",
+              "type": "text"
+            },
+            {
+              "key": "version",
+              "value": "{{staleMovieVersion}}",
+              "type": "text"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "23 Delete movie -> 204",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('deleted', () => pm.response.to.have.status(204));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "url": "{{baseUrl}}/api/v1/admin/movies/{{movieId}}?version={{movieVersion}}",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{adminToken}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "24 Deleted movie hidden from guests -> 404",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('hidden', () => pm.response.to.have.status(404));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/movies/{{movieId}}",
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    }
+  ]
+}

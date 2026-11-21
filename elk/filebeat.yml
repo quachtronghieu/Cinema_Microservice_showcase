@@ -1,0 +1,31 @@
+# Reads the JSON (ECS) log files written by the services and sends them to Elasticsearch.
+filebeat.inputs:
+  - type: filestream
+    id: cinema-services
+    paths:
+      - /logs/*.log
+    parsers:
+      - ndjson:
+          target: ""
+          overwrite_keys: true
+          add_error_key: true
+
+processors:
+  # identity-service logs the raw password reset link and Spring's generated password; neither may reach the central logs.
+  - drop_event:
+      when:
+        or:
+          - contains:
+              message: "Reset Deep-Link"
+          - contains:
+              message: "resetToken"
+          - contains:
+              message: "Using generated security password"
+  - drop_fields:
+      fields: ["agent", "ecs.version", "input", "host"]
+      ignore_missing: true
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+
+logging.level: warning

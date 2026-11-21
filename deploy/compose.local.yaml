@@ -1,0 +1,6 @@
+# Local testing only: publishes the Gateway over plain HTTP so the Flutter app and Postman
+# can reach it without trusting Caddy's local certificate. Never use this on a public server.
+services:
+  api-gateway:
+    ports:
+      - "8080:8080"

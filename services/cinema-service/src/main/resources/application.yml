@@ -1,0 +1,73 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: cinema-service
+  datasource:
+    url: ${CINEMA_DB_URL:jdbc:sqlserver://localhost:1433;databaseName=cinema_db;encrypt=false;}
+    # Runtime login without DDL rights; never sa (AGENTS 3). No default credentials in Git.
+    username: ${CINEMA_DB_USERNAME}
+    password: ${CINEMA_DB_PASSWORD}
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    hikari:
+      data-source-properties:
+        # The driver otherwise sends LocalTime as datetime, which SQL Server cannot compare with time columns.
+        sendTimeAsDatetime: false
+  jpa:
+    database-platform: org.hibernate.dialect.SQLServerDialect
+    hibernate:
+      # Flyway owns the schema; Hibernate only checks that entities match it (AGENTS 10).
+      ddl-auto: validate
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+    show-sql: true
+    open-in-view: false
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+    clean-disabled: true
+    # Separate migration login with DDL rights in cinema_db only.
+    url: ${CINEMA_MIGRATION_URL:${spring.datasource.url}}
+    user: ${CINEMA_MIGRATION_USERNAME}
+    password: ${CINEMA_MIGRATION_PASSWORD}
+
+cinema:
+  security:
+    issuer: ${JWT_ISSUER:cinema-identity}
+    jwk-set-uri: ${JWT_JWKS_URI:http://localhost:8081/.well-known/jwks.json}
+    audience: ${JWT_AUDIENCE:cinema-api}
+  # Credentials cinema uses to get its service token from identity (AGENTS 25). The secret comes only from
+  # the environment or a git-ignored local file; open/close sales fail with 503 while it is missing.
+  service-client:
+    id: ${CINEMA_SERVICE_CLIENT_ID:svc:cinema-service}
+    secret: ${CINEMA_SERVICE_CLIENT_SECRET:}
+
+services:
+  catalog:
+    url: ${CATALOG_SERVICE_URL:http://localhost:8082}
+  booking:
+    url: ${BOOKING_SERVICE_URL:http://localhost:8083}
+  identity:
+    url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
+
+eureka:
+  instance:
+    prefer-ip-address: true
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+      export:
+        enabled: ${TRACING_EXPORT_ENABLED:false}
