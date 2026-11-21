@@ -1,155 +1,151 @@
-# Cinema Management Microservices Platform (MSS301)
+# Cinema Management Microservices
 
-Hệ thống kiến trúc Microservices phân tán dành cho nền tảng quản lý rạp chiếu phim và đặt vé trực tuyến, phát triển theo chuẩn kiến trúc Spring Boot 3 & Spring Cloud tại [AGENTS.md](AGENTS.md).
+[English](README.md) | [Tiếng Việt](README.vi.md)
 
----
+A microservices backend (with a Flutter customer app) for cinema management and online ticket booking. It was migrated from a Spring Boot monolith and built by a team of 6 students at FPT University as part of the MSS301 course.
 
-## 1. Bản đồ Dịch vụ & Cổng mạng (Port Mapping)
+![Java](https://img.shields.io/badge/Java-21-orange)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.4-6DB33F)
+![Spring Cloud](https://img.shields.io/badge/Spring%20Cloud-Gateway%20%7C%20Eureka-6DB33F)
+![SQL Server](https://img.shields.io/badge/SQL%20Server-2022-CC2927)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
+![Flutter](https://img.shields.io/badge/Flutter-client-02569B)
 
-| Service | Port | Trách nhiệm chính & Database sở hữu |
+## Highlights
+
+- **4 domain services + gateway + service discovery**, each domain service owns its own database (database-per-service).
+- **JWT (RS256) authentication** issued by `identity-service`; other services verify tokens through a public **JWKS** endpoint.
+- **Role-based access control**: customer and admin endpoints are separated and enforced at the service level.
+- **Database migrations with Flyway** (no Hibernate schema auto-update); separate `migrator` and `app` SQL logins per database.
+- **Seat hold → booking flow** with a 5-minute hold, quote with vouchers and concessions.
+- **One-command local run** with Docker Compose and health-check based startup order.
+- Optional **monitoring stack** (Prometheus, Grafana, Zipkin) via a Compose profile.
+- **Flutter customer app** (Provider + MVVM, GoRouter, Dio).
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Client["Flutter app / Postman"] --> GW["api-gateway :8080"]
+    GW --> ID["identity-service :8081"]
+    GW --> CAT["catalog-service :8082"]
+    GW --> BK["booking-service :8083"]
+    GW --> CIN["cinema-service :8084"]
+    EU["discovery-server (Eureka) :8761"] -.registry.- GW
+    ID --- IDDB[("identity_db")]
+    CAT --- CATDB[("catalog_db")]
+    BK --- BKDB[("booking_db")]
+    CIN --- CINDB[("cinema_db")]
+```
+
+| Service | Port | Responsibility |
 |---|---|---|
-| **api-gateway** | `8080` | Điểm truy cập duy nhất (Ingress Routing, JWT Verification, Rate Limiting) |
-| **discovery-server** | `8761` | Eureka Service Registry & Health Registry |
-| **identity-service** | `8081` | Đăng ký, Đăng nhập (JWT RS256), Quản lý tài khoản, Phân quyền Admin (`identity_db`) |
-| **catalog-service** | `8082` | Phim ảnh, Đồ ăn/uống (Concession), Danh sách yêu thích (`catalog_db`) |
-| **booking-service** | `8083` | Giữ ghế, Đặt vé, Thanh toán demo, Quản lý Voucher, Vé (`booking_db`) |
-| **cinema-service** | `8084` | Quản lý phòng chiếu, Sơ đồ ghế vật lý, Lịch chiếu (`cinema_db`) |
-| **sqlserver** | `1433` | Microsoft SQL Server 2022 (Lưu trữ 4 database độc lập) |
-| **prometheus** *(Profile)* | `9090` | Thu thập metrics giám sát toàn hệ thống |
-| **grafana** *(Profile)* | `3000` | Dashboard trực quan hóa hiệu năng & lưu lượng |
+| `api-gateway` | 8080 | Single entry point, routing, JWT verification |
+| `discovery-server` | 8761 | Eureka service registry |
+| `identity-service` | 8081 | Register / login, JWT RS256, JWKS, accounts and roles |
+| `catalog-service` | 8082 | Movies, concessions (food and drinks), watchlist |
+| `booking-service` | 8083 | Seat holds, bookings, demo payment, vouchers |
+| `cinema-service` | 8084 | Rooms, seat maps, showtimes |
 
----
+Service conventions and API contracts are documented in [AGENTS.md](AGENTS.md) and [`docs/contracts/`](docs/contracts) (OpenAPI YAML files).
 
-## 2. Hướng dẫn Khởi chạy Hệ thống với 1 Câu lệnh (One Command Run)
+## Tech Stack
 
-### Bước 1: Chuẩn bị Môi trường
-Đảm bảo máy đã cài đặt **Docker Desktop** và Docker Engine đang hoạt động.
+| Area | Technology |
+|---|---|
+| Language / Framework | Java 21, Spring Boot 3.5.4, Spring MVC, Spring Data JPA |
+| Microservices | Spring Cloud Gateway, Eureka, OpenFeign |
+| Security | Spring Security, JWT RS256, JWKS |
+| Database | Microsoft SQL Server 2022, Flyway |
+| DevOps | Docker, Docker Compose, GitHub Actions |
+| Observability | Prometheus, Grafana, Zipkin (optional profile) |
+| Mobile client | Flutter, Dart, Material 3, Provider, GoRouter, Dio |
 
-### Bước 2: Thiết lập Biến môi trường
-Copy file mẫu cấu hình `.env.example` thành `.env` (file này đã có sẵn các giá trị mật khẩu và cấu hình an toàn mặc định):
+## Getting Started
+
+**Prerequisites:** Docker Desktop (Docker Engine running). About 6 GB of free RAM is recommended.
+
 ```bash
-# Trên Linux/macOS:
+# 1. Create your local environment file (Linux/macOS)
 cp .env.example .env
+#    Windows PowerShell: Copy-Item .env.example .env
 
-# Trên Windows PowerShell:
-Copy-Item .env.example .env
-```
-
-### Bước 3: Khởi chạy Toàn bộ Hệ thống
-Chạy 1 câu lệnh duy nhất từ thư mục gốc repository:
-```bash
+# 2. Build and start everything
 docker compose up -d --build
-# Hoặc:
-docker-compose up -d --build
+
+# 3. (Optional) start the monitoring stack too
+docker compose --profile monitoring up -d
 ```
 
-> **Ghi chú:** Để bật thêm cả stack giám sát (Prometheus & Grafana), thêm cờ `--profile monitoring`:
-> ```bash
-> docker compose --profile monitoring up -d
-> ```
+Edit `.env` and replace the `ChangeMe_...` placeholder passwords before running anything beyond a local demo.
 
----
+Startup order is controlled by health checks: `sqlserver` → `db-init` (creates 4 databases and least-privilege logins) → `discovery-server` → `identity-service` → `catalog` / `cinema` / `booking` → `api-gateway`.
 
-## 3. Thứ tự Khởi động & Cơ chế Tự phục hồi (Dependency Healthchecks)
+### Try it
 
-Hệ thống được điều phối qua `compose.yaml` với cơ chế kiểm tra sức khỏe tự động (`service_healthy`):
-1. **`sqlserver`** khởi động trước và vượt qua kiểm tra `SELECT 1` bằng `sqlcmd`.
-2. **`db-init`** chạy một lần (`restart: "no"`) để tự động tạo 4 database độc lập: `identity_db`, `catalog_db`, `cinema_db`, `booking_db` cùng các user phân quyền tối thiểu (`_app` và `_migrator`).
-3. **`discovery-server`** (Eureka) khởi động trên cổng `8761`.
-4. **`identity-service`** khởi động, thực thi Flyway migration cho `identity_db`, kết nối Eureka và công bố Public Key JWKS tại `/.well-known/jwks.json`.
-5. **`catalog-service`**, **`cinema-service`**, **`booking-service`** đồng loạt khởi động sau khi `identity-service` đã sẵn sàng, tự động lấy JWKS để giải mã chữ ký token và kết nối database riêng.
-6. **`api-gateway`** khởi động cuối cùng sau khi toàn bộ 4 domain services đã ở trạng thái `healthy`, bắt đầu định tuyến traffic người dùng qua cổng `8080`.
+This public copy does not ship seed accounts. Register one through the gateway:
 
----
-
-## 4. Kịch bản Kiểm thử Full Luồng (End-to-End Verification Journey)
-
-Sau khi hệ thống khởi chạy, mọi thao tác có thể thực hiện thông qua **API Gateway** tại `http://localhost:8080`:
-
-### 4.1. Đăng ký tài khoản mới (`identity-service`)
 ```bash
+# Register
 curl -X POST http://localhost:8080/api/v1/auth/register \
   -H "Content-Type: application/json" \
-  -d '{
-    "username": "customer_test",
-    "password": "ChangeMe_Local_9!",
-    "fullName": "Nguyen Van A",
-    "email": "customer_test@example.com",
-    "phoneNumber": "0912345678"
-  }'
-```
+  -d '{"username":"demo_user","password":"<your-password>","confirmPassword":"<your-password>","email":"demo_user@example.com","phone":"0900000001","dob":"2000-01-01","sex":true}'
 
-### 4.2. Đăng nhập để nhận JWT Token RS256 (`identity-service`)
-```bash
+# Login and copy the accessToken
 curl -X POST http://localhost:8080/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{
-    "username": "customer_test",
-    "password": "ChangeMe_Local_9!"
-  }'
-```
-*Lưu giá trị `accessToken` nhận được từ phản hồi để dùng cho các bước tiếp theo.*
+  -d '{"username":"demo_user","password":"<your-password>"}'
 
-### 4.3. Xem danh mục phim công khai (`catalog-service`)
-```bash
-curl -X GET http://localhost:8080/api/v1/movies
+# Browse the public movie catalog
+curl http://localhost:8080/api/v1/movies
 ```
 
-### 4.4. Thêm phim vào Watchlist bằng Token của khách hàng (`catalog-service`)
-```bash
-curl -X POST http://localhost:8080/api/v1/customer/watchlist \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "movieId": "M000001"
-  }'
+More end-to-end examples are in the Vietnamese guide ([README.vi.md](README.vi.md), section 4) and in the Postman collections under [`docs/postman/`](docs/postman).
+
+> Movies, rooms and showtimes need seed data. See [`docs/dev/local-seed/`](docs/dev/local-seed) for the local seed scripts.
+
+### Flutter app
+
+The customer app lives in [`cinema_booking_app/`](cinema_booking_app). See its own [README](cinema_booking_app/README.md) for setup, and make sure the backend is running through the gateway first.
+
+## Project Structure
+
+```
+.
+├── services/
+│   ├── identity-service/    # auth, JWT, accounts
+│   ├── catalog-service/     # movies, concessions, watchlist
+│   ├── cinema-service/      # rooms, seats, showtimes
+│   └── booking-service/     # seat holds, bookings, vouchers
+├── infrastructure/
+│   ├── api-gateway/
+│   └── discovery-server/
+├── cinema_booking_app/      # Flutter customer app
+├── Cinema_Management/       # original monolith (kept for reference)
+├── docs/                    # API contracts, Postman, migration notes
+├── monitoring/  elk/        # observability configs
+└── compose.yaml             # one-command local environment
 ```
 
-### 4.5. Xem danh sách suất chiếu công khai (`cinema-service`)
-```bash
-curl -X GET http://localhost:8080/api/v1/showtimes
-```
+## My Contributions
 
-### 4.6. Giữ ghế và Đặt vé (`booking-service`)
-```bash
-# 1. Giữ ghế 5 phút
-curl -X POST http://localhost:8080/api/v1/customer/seat-holds \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "showtimeId": "SW1",
-    "showtimeSeatIds": ["SS1"]
-  }'
+I worked on this project as one of 6 team members (see the Git history of the original team repository for per-author commits). My part:
 
-# 2. Tạo booking thanh toán
-curl -X POST http://localhost:8080/api/v1/customer/bookings \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "holdId": "<HOLD_ID>"
-  }'
-```
+**Catalog service (concessions)**
+- Built the concession CRUD API (admin create / update / soft delete, customer read-only for active items).
+- Wrote the Flyway migrations for the concession tables, including `version` for optimistic locking.
 
-### 4.7. Kiểm tra phân quyền Admin (Chống leo thang đặc quyền)
-```bash
-# Dùng token Khách cố tình gọi API Admin -> Bị chặn 403 FORBIDDEN
-curl -i -X POST http://localhost:8080/api/v1/admin/vouchers \
-  -H "Authorization: Bearer <CUSTOMER_TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"code":"SALE50"}'
-```
+**Booking service (vouchers)**
+- Implemented admin voucher management and added the matching API Gateway routes.
 
-### 4.8. Đăng xuất và Hủy phiên (`identity-service`)
-```bash
-curl -X POST http://localhost:8080/api/v1/auth/logout \
-  -H "Authorization: Bearer <TOKEN>"
-```
+**Flutter customer app**
+- Concession catalog screen with All / Popcorn / Drinks filters and a shared cart ViewModel.
+- Cart connected to the booking quote: seat-hold context, voucher apply / remove, error recovery, and skipping concessions while keeping held seats.
 
----
+**Team**
+- Drafted the shared `AGENTS.md` conventions used by the team.
 
-## 5. Dừng Hệ thống
-```bash
-docker compose down
-# Hoặc xóa cả volume dữ liệu nếu muốn cài đặt lại từ đầu:
-docker compose down -v
-```
+## Notes
+
+- This is a **sanitized copy** of a team project, published for learning and portfolio purposes. Real credentials, personal data and legacy account data have been removed or replaced with placeholders, so some flows need your own seed data.
+- No license file is included yet. All rights reserved by the original authors until one is added.
