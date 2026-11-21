@@ -11,7 +11,7 @@ param(
     [string]$CustomerPassword = '',
     [string]$CustomerId = 'CS000003',
     [string]$OtherCustomerId = 'CS000001',
-    [string]$AdminUsername = 'vyltt12',
+    [string]$AdminUsername = 'admin_demo',
     [string]$AdminPassword = '',
     [string]$BaseUrl = 'http://localhost:8080',
     [string]$LoginUrl = '',

@@ -49,7 +49,7 @@ Sơ đồ vật lý do Cinema trả (`GET /api/v1/showtimes/{id}/seats`), trạn
 - [ ] Phòng 3 hiển thị đúng 80 ghế trên app. API đã trả đủ 80 ghế và có suất OPEN ở phòng 3 ngày 2026-11-10 lúc 19:00 (tạo khi nghiệm thu task 8); còn xem trên app.
 - [ ] H-05 Cùng Vy kiểm tra giữ ghế rồi tạo đơn bằng API thật, thay `docs/dev/create_test_hold.sql` và màn debug. Có thể dùng [cinema-e2e.postman_collection.json](postman/cinema-e2e.postman_collection.json) của Vy; collection cần một suất OPEN trong hôm nay.
 - [ ] Hold ở instance A, tạo đơn ở instance B với hai JVM thật (mới đạt hai Spring context trong cùng JVM).
-- [x] B-04 Tài khoản USER/ADMIN demo: hướng dẫn trong [local-seed/README.md](dev/local-seed/README.md) (ADMIN `vyltt12`, USER đăng ký qua API); người dùng đã thực hiện 2026-11-08.
+- [x] B-04 Tài khoản USER/ADMIN demo: hướng dẫn trong [local-seed/README.md](dev/local-seed/README.md) (ADMIN `admin_demo`, USER đăng ký qua API); người dùng đã thực hiện 2026-11-08.
 - [x] B-05 Script và hướng dẫn backup/restore 4 DB trên bản sao tại [dev/backup-restore/](dev/backup-restore/README.md): đạt trên SQL Server tạm và trên DB local 2026-11-08 ([verification.md](verification.md)).
 - [x] B-06 Báo cáo đối soát `04_reconcile.sql` (chỉ đọc, 27 mục): đạt trên DB gốc và bản sao 2026-11-08.
 - [x] B-07 Chốt 3 phòng ngày 2026-11-07 (D-06).

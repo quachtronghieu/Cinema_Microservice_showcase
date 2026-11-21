@@ -34,7 +34,7 @@ Mật khẩu không ghi trong repo; mỗi người tự giữ.
 
 | Vai trò | Tài khoản | Nguồn | Claim trong token |
 |---|---|---|---|
-| ADMIN | `vyltt12` | Identity Flyway V2 (`Staff.ST000001`) | `roles=[ADMIN]`, `staffId=ST000001` |
+| ADMIN | `admin_demo` | Identity Flyway V2 (`Staff.ST000001`) | `roles=[ADMIN]`, `staffId=ST000001` |
 | USER | Tài khoản demo tự đăng ký, ví dụ `demo_user` | `POST /api/v1/auth/register` qua Gateway | `roles=[USER]`, `customerId` dạng UUID |
 
 Đăng ký USER qua Gateway. Username gồm 2–20 ký tự chữ, số hoặc `_`; mật khẩu ít nhất 6 ký tự; số điện thoại 9–11 chữ số:
